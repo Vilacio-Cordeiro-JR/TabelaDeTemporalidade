@@ -201,150 +201,121 @@ button { cursor: pointer; }
     color: var(--line-strong);
 }
 
-/* ---------- Visão em cascata (mobile: uma coluna por vez) ---------- */
+/* ---------- Visão em cascata: árvore de ramos ----------
+   Cada pasta é um bloco. Ao abrir, o ramo (.tg--child) aparece ao lado
+   (desktop) ou embaixo (celular), ligado por linhas de conexão. */
 
 .cascade {
     flex: 1;
     padding: 12px;
 }
 
-.col {
+.tg {
     display: flex;
     flex-direction: column;
-    width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-}
-
-.col__head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 6px 10px;
-    padding: 10px 12px;
-    background: var(--surface-alt);
-    border-bottom: 1px solid var(--line);
-    border-radius: var(--radius) var(--radius) 0 0;
-}
-
-.col__title {
-    flex: 1;
-    min-width: 0;
     margin: 0;
-    font-size: .875rem;
-    font-weight: 600;
-    line-height: 1.35;
-}
-
-.col__count {
-    flex: none;
-    padding-top: 1px;
-    font-size: .75rem;
-    color: var(--muted);
-    white-space: nowrap;
-}
-
-.col__back {
-    flex: 0 0 100%;
-    min-height: 36px;
     padding: 0;
-    border: 0;
-    background: none;
-    color: var(--primary);
-    font-weight: 600;
-    text-align: left;
+    list-style: none;
 }
 
-.col__close {
-    flex: none;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-    background: none;
-    color: var(--muted);
-    font-size: 1.25rem;
-    line-height: 1;
-}
-
-.col__close:hover {
-    background: var(--hover);
-    border-color: var(--line);
-    color: var(--ink);
-}
-
-.col__body {
+.tn {
     position: relative;
-    flex: 1;
-    min-height: 0;
-    scrollbar-width: thin;
-    scrollbar-color: var(--line-strong) transparent;
+    padding-bottom: 8px;
 }
 
-.col__body--docs {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+.tn:last-child { padding-bottom: 0; }
+
+/* Ramo aberto (celular: recuado, com linha vertical) */
+.tg--child {
+    margin: 8px 0 0 6px;
+    padding-left: 10px;
+    border-left: 2px solid var(--line-strong);
 }
 
-/* Item de pasta */
-
-.item {
+/* Bloco de pasta */
+.nodeblk {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 10px;
     width: 100%;
     min-height: 52px;
     padding: 10px 12px;
-    border: 0;
-    border-bottom: 1px solid #e6eaf0;
     background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
     text-align: left;
 }
 
-.item:last-child { border-bottom: 0; }
-
-button.item:hover { background: var(--hover); }
-
-.item.is-selected {
-    background: var(--primary-tint);
-    box-shadow: inset 4px 0 0 var(--primary);
+button.nodeblk:hover {
+    background: var(--hover);
+    border-color: var(--line-strong);
 }
 
-.item__main {
+.nodeblk.is-selected,
+button.nodeblk.is-selected:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.nodeblk__main {
     flex: 1;
     min-width: 0;
 }
 
-.item__cod {
+.nodeblk__cod {
     display: block;
     font-size: .75rem;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
 }
 
-.item__desc {
+.nodeblk__desc {
     display: block;
     font-size: .9375rem;
     line-height: 1.35;
     overflow-wrap: anywhere;
 }
 
-.item.is-selected .item__desc { font-weight: 600; }
-
-.item__chev {
+.nodeblk__n {
     flex: none;
-    font-size: 1.375rem;
-    line-height: 1;
-    color: var(--line-strong);
+    min-width: 28px;
+    padding: 1px 7px;
+    background: var(--surface-alt);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: .75rem;
+    color: var(--muted);
+    text-align: center;
 }
+
+.nodeblk.is-selected .nodeblk__cod { color: #c3d0e4; }
+
+.nodeblk.is-selected .nodeblk__n {
+    background: rgba(255, 255, 255, .16);
+    border-color: transparent;
+    color: #fff;
+}
+
+/* Conector que entra em cada bloco/documento de um ramo */
+.tg--child > .tn > .nodeblk::before,
+.tg--child > .tn > .doc::before {
+    content: "";
+    position: absolute;
+    top: 26px;
+    left: -10px;
+    width: 10px;
+    border-top: 2px solid var(--line-strong);
+}
+
+/* O caminho aberto fica destacado */
+.tg--child > .tn.is-open > .nodeblk::before { border-top-color: var(--primary); }
 
 /* ---------- Registro de documento ---------- */
 
 .doc {
+    position: relative;
     background: var(--surface);
     border: 1px solid var(--line);
     border-left: 4px solid var(--perm);
@@ -611,34 +582,71 @@ button.item:hover { background: var(--hover); }
 
     .crumbs__inner { padding: 0 24px; }
 
-    /* Cascata */
+    /* Cascata: tela rolável, ramos abrem à direita */
 
     .cascade {
-        display: flex;
-        align-items: stretch;
-        gap: 16px;
         min-height: 0;
-        padding: 16px 24px;
-        overflow-x: auto;
-        overflow-y: hidden;
+        padding: 24px;
+        overflow: auto;
         scrollbar-width: thin;
     }
 
-    .col {
-        flex: 0 0 320px;
-        width: 320px;
-        min-height: 0;
+    .tg { width: 264px; }
+    .tg--docs { width: 500px; }
+
+    .tg--child {
+        position: absolute;
+        top: 0;
+        left: calc(100% + 48px);
+        margin: 0;
+        padding: 0;
+        border-left: 0;
     }
 
-    .col--docs {
-        flex: 1 0 560px;
-        width: auto;
-        max-width: 880px;
+    /* respiro à direita do último ramo, ao rolar */
+    .tg--child::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 100%;
+        width: 24px;
+        height: 1px;
     }
 
-    .col__body { overflow-y: auto; }
+    /* linha vertical que liga os filhos */
+    .tg--child > .tn::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -24px;
+        border-left: 2px solid var(--line-strong);
+    }
 
-    .item { min-height: 48px; }
+    .tg--child > .tn:first-child::before { top: 26px; }
+
+    .tg--child > .tn:last-child::before {
+        bottom: auto;
+        height: 28px;
+    }
+
+    .tg--child > .tn:only-child::before { display: none; }
+
+    .tg--child > .tn > .nodeblk::before,
+    .tg--child > .tn > .doc::before {
+        left: -24px;
+        width: 24px;
+    }
+
+    /* linha que sai do bloco aberto em direção ao ramo */
+    .tn.is-open > .nodeblk::after {
+        content: "";
+        position: absolute;
+        top: 26px;
+        left: 100%;
+        width: 24px;
+        border-top: 2px solid var(--primary);
+    }
 
     /* Lista */
 

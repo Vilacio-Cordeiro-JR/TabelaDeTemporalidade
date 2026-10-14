@@ -21,7 +21,6 @@ let activeSelectionPath = [];
 let currentView = 'cascade';
 let hitNode = null;            // documento encontrado pela busca (destacado)
 let pendingCenter = false;     // centraliza o resultado da busca na próxima renderização
-let lastRenderedDepth = -1;
 
 const allDocs = [];            // todos os documentos, na ordem da árvore (usado na busca)
 const folderState = new Map(); // modo lista: id da pasta -> aberta (true) ou fechada (false)
@@ -132,15 +131,14 @@ function bindEvents() {
     });
 
     $('cascadeWrapper').addEventListener('click', (e) => {
-        const close = e.target.closest('[data-close]');
-        if (close) return closeColumn(Number(close.dataset.close));
+        const block = e.target.closest('[data-idx]');
+        if (!block) return;
+        const depth = Number(block.dataset.depth);
+        const child = activeSelectionPath[depth].filhos[Number(block.dataset.idx)];
+        const wasOpen = activeSelectionPath[depth + 1] === child;
 
-        const item = e.target.closest('[data-idx]');
-        if (!item) return;
-        const depth = Number(item.dataset.depth);
-        const child = activeSelectionPath[depth].filhos[Number(item.dataset.idx)];
         activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
-        if (hasKids(child)) activeSelectionPath.push(child);
+        if (!wasOpen && hasKids(child)) activeSelectionPath.push(child);   // clicar de novo fecha o ramo
         renderApp();
     });
 
@@ -191,11 +189,6 @@ function jumpToDepth(depth) {
     renderApp();
 }
 
-function closeColumn(depth) {
-    activeSelectionPath = activeSelectionPath.slice(0, depth);
-    renderApp();
-}
-
 function renderBreadcrumb() {
     const bar = $('breadcrumbBar');
     const last = activeSelectionPath.length - 1;
@@ -234,93 +227,61 @@ function docHtml(node) {
         </article>`;
 }
 
-/* ---------- Visão em cascata ---------- */
+/* ---------- Visão em cascata (árvore de ramos) ---------- */
 
-function itemHtml(child, index, depth, selected) {
+function blockHtml(child, index, depth, selected) {
     const navigable = hasKids(child);
     const tag = navigable ? 'button' : 'div';
-    const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}"` : '';
-    const cod = depth > 0 && hasNumericCode(child.cod)
-        ? `<span class="item__cod">${esc(child.cod)}</span>` : '';
+    const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}" aria-expanded="${selected}"` : '';
+    const cod = hasNumericCode(child.cod) ? `<span class="nodeblk__cod">${esc(child.cod)}</span>` : '';
+    const count = navigable
+        ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` : '';
 
-    return `
-        <${tag} class="item${selected ? ' is-selected' : ''}"${attrs}${selected ? ' aria-current="true"' : ''}>
-            <span class="item__main">${cod}<span class="item__desc">${esc(child.descricao)}</span></span>
-            ${navigable ? '<span class="item__chev" aria-hidden="true">›</span>' : ''}
-        </${tag}>`;
+    return `<${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>` +
+           `<span class="nodeblk__main">${cod}<span class="nodeblk__desc">${esc(child.descricao)}</span></span>${count}</${tag}>`;
 }
 
-function columnHtml(parent, depth, mobile) {
-    const children = parent.filhos || [];
-    const isDocLevel = children.some(hasDoc);
+// Filhos de "parent" como um grupo de blocos; o filho aberto traz o próprio ramo dentro dele.
+function groupHtml(parent, depth) {
+    const kids = parent.filhos || [];
     const next = activeSelectionPath[depth + 1];
-    const title = depth === 0 ? 'Áreas' : parent.descricao;
+    const classes = `tg ${depth === 0 ? 'tg--root' : 'tg--child'}${kids.some(hasDoc) ? ' tg--docs' : ''}`;
 
-    let back = '';
-    let close = '';
-    if (depth > 0) {
-        if (mobile) back = `<button type="button" class="col__back" data-close="${depth}">‹ Voltar</button>`;
-        else close = `<button type="button" class="col__close" data-close="${depth}" aria-label="Fechar esta coluna" title="Fechar">&times;</button>`;
-    }
+    const items = kids.map((child, i) => {
+        if (hasDoc(child)) return `<li class="tn tn--doc">${docHtml(child)}</li>`;
+        const open = child === next;
+        return `<li class="tn${open ? ' is-open' : ''}">${blockHtml(child, i, depth, open)}${open ? groupHtml(child, depth + 1) : ''}</li>`;
+    });
 
-    const body = children.map((child, i) => (
-        hasDoc(child) ? docHtml(child) : itemHtml(child, i, depth, child === next)
-    )).join('');
-
-    return `
-        <section class="col${isDocLevel ? ' col--docs' : ''}" data-key="${parent._id}">
-            <div class="col__head">
-                ${back}
-                <h2 class="col__title">${esc(title)}</h2>
-                <span class="col__count">${plural(children.length, 'item', 'itens')}</span>
-                ${close}
-            </div>
-            <div class="col__body${isDocLevel ? ' col__body--docs' : ''}">${body}</div>
-        </section>`;
-}
-
-function centerIn(container, el) {
-    container.scrollTop = el.offsetTop - (container.clientHeight - el.offsetHeight) / 2;
+    return `<ul class="${classes}">${items.join('')}</ul>`;
 }
 
 function renderCascade() {
     const wrap = $('cascadeWrapper');
-    const mobile = MOBILE_QUERY.matches;
-    const lastDepth = activeSelectionPath.length - 1;
+    wrap.innerHTML = groupHtml(activeSelectionPath[0], 0);
 
-    // Guarda a rolagem de cada coluna para não "pular" ao clicar
-    const savedScroll = new Map();
-    wrap.querySelectorAll('.col').forEach((col) => {
-        savedScroll.set(col.dataset.key, col.querySelector('.col__body').scrollTop);
-    });
+    const hit = wrap.querySelector('.is-hit');
 
-    let html = '';
-    activeSelectionPath.forEach((parent, depth) => {
-        if (mobile && depth !== lastDepth) return;   // celular: só a coluna atual
-        if (!hasKids(parent) && depth > 0) return;
-        html += columnHtml(parent, depth, mobile);
-    });
-    wrap.innerHTML = html;
-
-    if (mobile) {
-        const hit = wrap.querySelector('.is-hit');
-        if (pendingCenter && hit) {
-            hit.scrollIntoView({ block: 'center' });
-        } else if (lastRenderedDepth !== lastDepth) {
-            const top = wrap.getBoundingClientRect().top + window.scrollY - 8;
-            if (window.scrollY > top) window.scrollTo(0, Math.max(top, 0));
-        }
-    } else {
-        wrap.querySelectorAll('.col').forEach((col) => {
-            const body = col.querySelector('.col__body');
-            const target = body.querySelector('.is-hit') || body.querySelector('.is-selected');
-            if (pendingCenter && target) centerIn(body, target);
-            else body.scrollTop = savedScroll.get(col.dataset.key) || 0;
-        });
-        wrap.scrollLeft = wrap.scrollWidth;
+    if (MOBILE_QUERY.matches) {
+        if (pendingCenter && hit) hit.scrollIntoView({ block: 'center' });
+        return;
     }
 
-    lastRenderedDepth = lastDepth;
+    const box = wrap.getBoundingClientRect();
+
+    // resultado da busca: centraliza na vertical
+    if (pendingCenter && hit) {
+        const h = hit.getBoundingClientRect();
+        wrap.scrollTop += (h.top - box.top) - (wrap.clientHeight - h.height) / 2;
+    }
+
+    // garante que o ramo mais fundo apareça por inteiro na horizontal
+    const groups = wrap.querySelectorAll('.tg--child');
+    const deepest = groups[groups.length - 1];
+    if (deepest) {
+        const right = deepest.getBoundingClientRect().right - box.left + wrap.scrollLeft + 24;
+        if (right > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = right - wrap.clientWidth;
+    }
 }
 
 /* ---------- Visão em lista ---------- */
