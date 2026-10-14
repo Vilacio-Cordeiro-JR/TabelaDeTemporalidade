@@ -1,0 +1,21 @@
+.cascade-container::-webkit-scrollbar,
+#listViewWrapper::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+.cascade-container::-webkit-scrollbar-track,
+#listViewWrapper::-webkit-scrollbar-track {
+    background: #f1f5f9;
+}
+.cascade-container::-webkit-scrollbar-thumb,
+#listViewWrapper::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+@media (max-width: 768px) {
+    .cascade-container {
+        flex-direction: column !important;
+        overflow-x: hidden !important;
+        align-items: stretch !important;
+    }
+}
