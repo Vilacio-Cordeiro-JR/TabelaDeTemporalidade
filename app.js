@@ -19,8 +19,9 @@ const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
 let treeData = null;
 let activeSelectionPath = [];
 let currentView = 'cascade';
-let hitNode = null;            // documento encontrado pela busca (destacado)
-let pendingCenter = false;     // centraliza o resultado da busca na próxima renderização
+let searchTerms = [];          // termos da busca (normalizados); vazio = sem busca
+let searchResults = [];        // documentos que contêm todos os termos
+let viewBeforeSearch = null;   // visão em que o usuário estava antes da busca
 
 const allDocs = [];            // todos os documentos, na ordem da árvore (usado na busca)
 const folderState = new Map(); // modo lista: id da pasta -> aberta (true) ou fechada (false)
@@ -151,6 +152,7 @@ function bindEvents() {
         }
         const action = e.target.closest('[data-action]');
         if (!action) return;
+        if (action.dataset.action === 'clear-search') return clearSearch();
         setAllFolders(currentNode(), action.dataset.action === 'expand');
         renderListView();
     });
@@ -181,7 +183,6 @@ function renderApp() {
     renderBreadcrumb();
     if (currentView === 'cascade') renderCascade();
     else renderListView();
-    pendingCenter = false;
 }
 
 function jumpToDepth(depth) {
@@ -207,23 +208,57 @@ function renderBreadcrumb() {
 
 /* ---------- Registro de documento (usado nas duas visões) ---------- */
 
-function docHtml(node) {
+// Escapa o texto e marca os termos buscados (ignorando acentos e maiúsculas).
+function highlight(text, terms) {
+    const s = String(text ?? '');
+    if (!terms || !terms.length) return esc(s);
+
+    let norm = '';
+    const map = [];
+    for (let i = 0; i < s.length; i++) {
+        const n = normalize(s[i]);
+        for (let k = 0; k < n.length; k++) { norm += n[k]; map.push(i); }
+    }
+
+    const ranges = [];
+    terms.forEach((t) => {
+        let from = 0;
+        let idx;
+        while ((idx = norm.indexOf(t, from)) !== -1) {
+            ranges.push([map[idx], map[idx + t.length - 1] + 1]);
+            from = idx + t.length;
+        }
+    });
+    ranges.sort((a, b) => a[0] - b[0]);
+
+    let out = '';
+    let last = 0;
+    for (const [a, b] of ranges) {
+        if (b <= last) continue;
+        const start = Math.max(a, last);
+        out += esc(s.slice(last, start)) + '<mark>' + esc(s.slice(start, b)) + '</mark>';
+        last = b;
+    }
+    return out + esc(s.slice(last));
+}
+
+function docHtml(node, terms = []) {
     const d = node.documento;
     const perm = !d.eliminacao;
-    const classes = `doc${perm ? '' : ' doc--elim'}${node === hitNode ? ' is-hit' : ''}`;
+    const classes = `doc${perm ? '' : ' doc--elim'}`;
 
     return `
         <article class="${classes}">
             <div class="doc__top">
-                <span class="doc__cod">${esc(node.cod)}</span>
+                <span class="doc__cod">${highlight(node.cod, terms)}</span>
                 <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
             </div>
-            <h3 class="doc__title">${esc(node.descricao)}</h3>
+            <h3 class="doc__title">${highlight(node.descricao, terms)}</h3>
             <dl class="doc__fields">
                 <div><dt>${LABELS.vigencia}</dt><dd>${esc(formatPrazo(d.prazo_vigencia))}</dd></div>
                 <div><dt>${LABELS.arquivo}</dt><dd>${esc(formatPrazo(d.unidade_atribuicao_arquivistica))}</dd></div>
             </dl>
-            ${d.obs ? `<p class="doc__obs"><strong>${LABELS.obs}:</strong> ${esc(d.obs)}</p>` : ''}
+            ${d.obs ? `<p class="doc__obs"><strong>${LABELS.obs}:</strong> ${highlight(d.obs, terms)}</p>` : ''}
         </article>`;
 }
 
@@ -260,22 +295,10 @@ function renderCascade() {
     const wrap = $('cascadeWrapper');
     wrap.innerHTML = groupHtml(activeSelectionPath[0], 0);
 
-    const hit = wrap.querySelector('.is-hit');
-
-    if (MOBILE_QUERY.matches) {
-        if (pendingCenter && hit) hit.scrollIntoView({ block: 'center' });
-        return;
-    }
-
-    const box = wrap.getBoundingClientRect();
-
-    // resultado da busca: centraliza na vertical
-    if (pendingCenter && hit) {
-        const h = hit.getBoundingClientRect();
-        wrap.scrollTop += (h.top - box.top) - (wrap.clientHeight - h.height) / 2;
-    }
+    if (MOBILE_QUERY.matches) return;
 
     // garante que o ramo mais fundo apareça por inteiro na horizontal
+    const box = wrap.getBoundingClientRect();
     const groups = wrap.querySelectorAll('.tg--child');
     const deepest = groups[groups.length - 1];
     if (deepest) {
@@ -316,6 +339,8 @@ function listNodeHtml(node, level) {
 }
 
 function renderListView() {
+    if (searchTerms.length) return renderSearchResults();
+
     const container = $('listViewWrapper');
     const node = currentNode();
     const title = node === treeData ? 'Todas as áreas' : node.descricao;
@@ -335,40 +360,81 @@ function renderListView() {
             <div class="tree">${(node.filhos || []).map((c) => listNodeHtml(c, 1)).join('')}</div>
         </div>`;
 
-    if (pendingCenter) {
-        const hit = container.querySelector('.is-hit');
-        if (hit) hit.scrollIntoView({ block: 'center' });
-    }
 }
 
-/* ---------- Busca ---------- */
+/* ---------- Busca: resultados aparecem na visão em lista ---------- */
+
+function resultHtml(doc) {
+    const folders = pathTo(doc).slice(1, -1).map((n) => esc(nodeLabel(n))).join(' › ');
+    return `
+        <div class="result">
+            <p class="result__path">${folders}</p>
+            ${docHtml(doc, searchTerms)}
+        </div>`;
+}
+
+function renderSearchResults() {
+    const container = $('listViewWrapper');
+    const total = searchResults.length;
+    const typed = $('searchInput').value.trim();
+
+    const body = total
+        ? searchResults.map(resultHtml).join('')
+        : `<div class="notice notice--info">
+               <p>Nenhum documento encontrado para <strong>“${esc(typed)}”</strong>.</p>
+               <p>Tente outro termo ou apenas parte do código.</p>
+           </div>`;
+
+    container.innerHTML = `
+        <div class="list-inner">
+            <div class="list-head">
+                <div>
+                    <h2 class="list-head__title">Resultados da busca</h2>
+                    <p class="list-head__hint">${plural(total, 'documento encontrado', 'documentos encontrados')} para “${esc(typed)}”.</p>
+                </div>
+                <div class="list-actions">
+                    <button type="button" class="btn" data-action="clear-search">Limpar busca</button>
+                </div>
+            </div>
+            <div class="results">${body}</div>
+        </div>`;
+
+    container.scrollTop = 0;
+}
+
+function clearSearch() {
+    $('searchInput').value = '';
+    handleSearch('');
+}
 
 function handleSearch(query) {
     if (!treeData) return;
     const status = $('searchStatus');
-    const q = normalize(query.trim());
+    const terms = normalize(query).split(/\s+/).filter(Boolean);
+    searchTerms = terms;
 
-    if (!q) {
+    if (!terms.length) {
+        searchResults = [];
         status.textContent = '';
-        if (hitNode) { hitNode = null; renderApp(); }
+        if (viewBeforeSearch) {
+            const previous = viewBeforeSearch;
+            viewBeforeSearch = null;
+            switchView(previous);
+        } else {
+            renderApp();
+        }
         return;
     }
 
-    const results = allDocs.filter((doc) => doc._search.includes(q));
-    if (!results.length) {
-        status.textContent = 'Nenhum documento encontrado.';
-        return;
+    searchResults = allDocs.filter((doc) => terms.every((t) => doc._search.includes(t)));
+    status.textContent = searchResults.length
+        ? plural(searchResults.length, 'resultado', 'resultados') + '.'
+        : 'Nenhum documento encontrado.';
+
+    if (currentView !== 'list') {
+        viewBeforeSearch = currentView;
+        switchView('list');
+    } else {
+        renderApp();
     }
-
-    const first = results[0];
-    const path = pathTo(first);
-    status.textContent = results.length === 1
-        ? '1 resultado.'
-        : `${results.length.toLocaleString('pt-BR')} resultados. Exibindo o primeiro.`;
-
-    hitNode = first;
-    activeSelectionPath = path.slice(0, -1);               // termina na pasta que contém o documento
-    path.slice(1, -1).forEach((n) => folderState.set(n._id, true)); // abre as pastas no modo lista
-    pendingCenter = true;
-    renderApp();
 }
