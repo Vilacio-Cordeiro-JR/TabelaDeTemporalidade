@@ -1,729 +1,493 @@
+'use strict';
+
 /* ==========================================================================
    Tabela de Temporalidade e Destinação de Documentos
-   Estilo: sóbrio, estático (sem animações), mobile-first.
-   Breakpoint único: 900px (deve ser o mesmo valor usado em app.js).
    ========================================================================== */
 
-:root {
-    --ink: #1a2433;
-    --muted: #5a6578;
-    --line: #d3d9e2;
-    --line-strong: #b4bdca;
-    --page: #f1f3f6;
-    --surface: #ffffff;
-    --surface-alt: #f7f9fb;
-    --hover: #f0f4f9;
+// Textos exibidos nos registros. Ajuste aqui se precisar renomear algum campo.
+const LABELS = {
+    vigencia: 'Prazo de vigência',   // campo: documento.prazo_vigencia
+    arquivo: 'Prazo no arquivo',     // campo: documento.unidade_atribuicao_arquivistica
+    permanente: 'Guarda permanente',
+    eliminacao: 'Eliminação',
+    obs: 'Observações'
+};
 
-    --primary: #1b3a63;
-    --primary-tint: #e6edf7;
+// Ordenação dos resultados da busca.
+// Palavras-chave de maior interesse: um documento que contém alguma delas (no início de uma palavra,
+// então plurais também contam) sobe na lista. Acentos e maiúsculas são ignorados.
+const PRIORITY_KEYWORDS = ['Dossiê', 'Processo', 'Contrato', 'Projeto', 'Relatório', 'Ofício', 'Memorando'];
 
-    --perm: #1c5aa3;
-    --perm-tint: #e8f1fb;
-    --elim: #a12f2a;
-    --elim-tint: #fbedec;
+// Faixas de peso, da mais para a menos relevante. O peso maior aparece primeiro.
+const PRIORITY_GROUPS = [
+    { key: 'both',  weight: 3, label: 'Palavra-chave no título e na observação' },
+    { key: 'title', weight: 2, label: 'Palavra-chave no título' },
+    { key: 'obs',   weight: 1, label: 'Palavra-chave na observação' },
+    { key: 'none',  weight: 0, label: 'Demais resultados' }
+];
 
-    --focus: #d98c00;
-    --radius: 6px;
-    --font: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+// Mesmo valor do breakpoint em style.css (900px)
+const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
+
+let treeData = null;
+let activeSelectionPath = [];
+let currentView = 'cascade';
+let searchTerms = [];          // termos da busca (normalizados); vazio = sem busca
+let searchResults = [];        // documentos que contêm todos os termos
+let viewBeforeSearch = null;   // visão em que o usuário estava antes da busca
+
+const allDocs = [];            // todos os documentos, na ordem da árvore (usado na busca)
+const folderState = new Map(); // modo lista: id da pasta -> aberta (true) ou fechada (false)
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------- Utilidades ---------- */
+
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
 }
 
-*,
-*::before,
-*::after { box-sizing: border-box; }
-
-[hidden] { display: none !important; }
-
-html { -webkit-text-size-adjust: 100%; }
-
-body {
-    margin: 0;
-    font-family: var(--font);
-    font-size: 15px;
-    line-height: 1.45;
-    color: var(--ink);
-    background: var(--page);
+function normalize(text) {
+    return String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
-button, input { font: inherit; color: inherit; }
-button { cursor: pointer; }
+const PRIORITY_RE = new RegExp(
+    '\\b(?:' + PRIORITY_KEYWORDS.map((k) => normalize(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')'
+);
 
-:focus-visible {
-    outline: 3px solid var(--focus);
-    outline-offset: 1px;
+function weightOf(key) {
+    return PRIORITY_GROUPS.find((g) => g.key === key).weight;
 }
 
-/* ---------- Estrutura geral (mobile: rolagem normal da página) ---------- */
-
-.app {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-    min-height: 100dvh;
+// Peso do documento: palavra-chave no título e na observação > só no título > só na observação > nenhuma.
+function priorityWeight(node) {
+    const inTitle = PRIORITY_RE.test(normalize(node.descricao));
+    const inObs = PRIORITY_RE.test(normalize(node.documento.obs));
+    if (inTitle && inObs) return weightOf('both');
+    if (inTitle) return weightOf('title');
+    if (inObs) return weightOf('obs');
+    return weightOf('none');
 }
 
-.main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
+const hasDoc = (node) => node.documento !== null && node.documento !== undefined;
+const hasKids = (node) => Array.isArray(node.filhos) && node.filhos.length > 0;
+const hasNumericCode = (cod) => /\d/.test(cod || '');
+
+function nodeLabel(node) {
+    return hasNumericCode(node.cod) ? `${node.cod} – ${node.descricao}` : node.descricao;
 }
 
-/* ---------- Cabeçalho ---------- */
-
-.site-header {
-    background: var(--primary);
-    color: #fff;
+function formatPrazo(value) {
+    const t = String(value ?? '').trim();
+    if (!t || t === '-') return '—';
+    if (/^\d+$/.test(t)) return `${t} ${t === '1' ? 'ano' : 'anos'}`;
+    return t;
 }
 
-.site-header__inner {
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+function plural(n, one, many) {
+    return `${n.toLocaleString('pt-BR')} ${n === 1 ? one : many}`;
 }
 
-.brand__title {
-    margin: 0;
-    font-size: 1.125rem;
-    font-weight: 600;
-    line-height: 1.25;
+// Dá um id a cada nó, guarda o pai e prepara o texto de busca.
+function indexTree(node, parent = null) {
+    node._parent = parent;
+    node._id = String(indexTree.counter++);
+    if (hasDoc(node)) {
+        node._search = normalize(`${node.cod} ${node.descricao} ${node.documento.obs || ''}`);
+        node._weight = priorityWeight(node);
+        allDocs.push(node);
+    }
+    node._docs = hasDoc(node) ? 1 : 0;
+    (node.filhos || []).forEach((child) => {
+        indexTree(child, node);
+        node._docs += child._docs;
+    });
+}
+indexTree.counter = 0;
+
+function pathTo(node) {
+    const path = [];
+    for (let n = node; n; n = n._parent) path.unshift(n);
+    return path;
 }
 
-.brand__sub {
-    margin: 2px 0 0;
-    font-size: .8125rem;
-    color: #c3d0e4;
+function currentNode() {
+    return activeSelectionPath[activeSelectionPath.length - 1];
 }
 
-.tools {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+/* ---------- Carga dos dados ---------- */
+
+document.addEventListener('DOMContentLoaded', () => {
+    bindEvents();
+    $('cascadeWrapper').innerHTML = '<div class="notice notice--info"><p>Carregando tabela…</p></div>';
+
+    fetch('arvore_temporalidade.json')
+        .then((response) => {
+            if (!response.ok) throw new Error('Erro ao carregar o arquivo JSON.');
+            return response.json();
+        })
+        .then((data) => {
+            treeData = data;
+            indexTree(treeData);
+            activeSelectionPath = [treeData];
+            switchView('cascade');
+        })
+        .catch((error) => {
+            console.error(error);
+            $('breadcrumbBar').innerHTML = '';
+            $('cascadeWrapper').innerHTML = `
+                <div class="notice">
+                    <p><strong>Não foi possível carregar a tabela.</strong></p>
+                    <p>Verifique se o arquivo <em>arvore_temporalidade.json</em> está na mesma pasta do site e abra a página por um servidor (por exemplo, <em>python -m http.server</em>), não direto pelo arquivo.</p>
+                </div>`;
+        });
+});
+
+/* ---------- Eventos ---------- */
+
+function bindEvents() {
+    $('btnViewCascade').addEventListener('click', () => switchView('cascade'));
+    $('btnViewList').addEventListener('click', () => switchView('list'));
+
+    let timer = null;
+    $('searchInput').addEventListener('input', (e) => {
+        clearTimeout(timer);
+        const value = e.target.value;
+        timer = setTimeout(() => handleSearch(value), 200);
+    });
+
+    $('breadcrumbBar').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-depth]');
+        if (btn) jumpToDepth(Number(btn.dataset.depth));
+    });
+
+    $('cascadeWrapper').addEventListener('click', (e) => {
+        const block = e.target.closest('[data-idx]');
+        if (!block) return;
+        const depth = Number(block.dataset.depth);
+        const child = activeSelectionPath[depth].filhos[Number(block.dataset.idx)];
+        const wasOpen = activeSelectionPath[depth + 1] === child;
+
+        activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
+        if (!wasOpen && hasKids(child)) activeSelectionPath.push(child);   // clicar de novo fecha o ramo
+        renderApp();
+    });
+
+    $('listViewWrapper').addEventListener('click', (e) => {
+        const toggle = e.target.closest('[data-toggle]');
+        if (toggle) {
+            const id = toggle.dataset.toggle;
+            folderState.set(id, toggle.getAttribute('aria-expanded') !== 'true');
+            return renderListView();
+        }
+        const action = e.target.closest('[data-action]');
+        if (!action) return;
+        if (action.dataset.action === 'clear-search') return clearSearch();
+        setAllFolders(currentNode(), action.dataset.action === 'expand');
+        renderListView();
+    });
+
+    const onBreakpoint = () => { if (treeData) renderApp(); };
+    if (MOBILE_QUERY.addEventListener) MOBILE_QUERY.addEventListener('change', onBreakpoint);
+    else MOBILE_QUERY.addListener(onBreakpoint);
 }
 
-.seg {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    border: 1px solid rgba(255, 255, 255, .4);
-    border-radius: var(--radius);
-    overflow: hidden;
+/* ---------- Navegação ---------- */
+
+function switchView(view) {
+    currentView = view;
+    const isCascade = view === 'cascade';
+
+    $('btnViewCascade').classList.toggle('is-active', isCascade);
+    $('btnViewCascade').setAttribute('aria-pressed', String(isCascade));
+    $('btnViewList').classList.toggle('is-active', !isCascade);
+    $('btnViewList').setAttribute('aria-pressed', String(!isCascade));
+
+    $('cascadeWrapper').hidden = !isCascade;
+    $('listViewWrapper').hidden = isCascade;
+
+    renderApp();
 }
 
-.seg__btn {
-    min-height: 44px;
-    padding: 0 16px;
-    border: 0;
-    background: transparent;
-    color: #fff;
-    font-weight: 600;
+function renderApp() {
+    renderBreadcrumb();
+    if (currentView === 'cascade') renderCascade();
+    else renderListView();
 }
 
-.seg__btn + .seg__btn { border-left: 1px solid rgba(255, 255, 255, .4); }
-
-.seg__btn.is-active {
-    background: #fff;
-    color: var(--primary);
+function jumpToDepth(depth) {
+    activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
+    renderApp();
 }
 
-.search { min-width: 0; }
+function renderBreadcrumb() {
+    const bar = $('breadcrumbBar');
+    const last = activeSelectionPath.length - 1;
 
-.search__input {
-    display: block;
-    width: 100%;
-    min-height: 44px;
-    padding: 0 12px;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-    background: #fff;
-    color: var(--ink);
-    font-size: 1rem; /* 16px evita zoom automático no iOS */
+    bar.innerHTML = activeSelectionPath.map((node, i) => {
+        const name = i === 0 ? 'Início' : nodeLabel(node);
+        if (i === last) {
+            return `<span class="crumb crumb--current" title="${esc(name)}" aria-current="page">${esc(name)}</span>`;
+        }
+        return `<button type="button" class="crumb" data-depth="${i}" title="${esc(name)}">${esc(name)}</button>` +
+               '<span class="crumb-sep" aria-hidden="true">/</span>';
+    }).join('');
+
+    bar.scrollLeft = bar.scrollWidth;
 }
 
-.search__input::placeholder { color: #6b7587; }
+/* ---------- Registro de documento (usado nas duas visões) ---------- */
 
-.search__status {
-    margin: 6px 0 0;
-    font-size: .8125rem;
-    color: #dbe5f3;
+// Escapa o texto e marca os termos buscados (ignorando acentos e maiúsculas).
+function highlight(text, terms) {
+    const s = String(text ?? '');
+    if (!terms || !terms.length) return esc(s);
+
+    let norm = '';
+    const map = [];
+    for (let i = 0; i < s.length; i++) {
+        const n = normalize(s[i]);
+        for (let k = 0; k < n.length; k++) { norm += n[k]; map.push(i); }
+    }
+
+    const ranges = [];
+    terms.forEach((t) => {
+        let from = 0;
+        let idx;
+        while ((idx = norm.indexOf(t, from)) !== -1) {
+            ranges.push([map[idx], map[idx + t.length - 1] + 1]);
+            from = idx + t.length;
+        }
+    });
+    ranges.sort((a, b) => a[0] - b[0]);
+
+    let out = '';
+    let last = 0;
+    for (const [a, b] of ranges) {
+        if (b <= last) continue;
+        const start = Math.max(a, last);
+        out += esc(s.slice(last, start)) + '<mark>' + esc(s.slice(start, b)) + '</mark>';
+        last = b;
+    }
+    return out + esc(s.slice(last));
 }
 
-.search__status:empty { display: none; }
+function docHtml(node, terms = []) {
+    const d = node.documento;
+    const perm = !d.eliminacao;
+    const classes = `doc${perm ? '' : ' doc--elim'}`;
 
-/* ---------- Trilha ---------- */
-
-.crumbs {
-    background: var(--surface);
-    border-bottom: 1px solid var(--line);
+    return `
+        <article class="${classes}">
+            <div class="doc__top">
+                <span class="doc__cod">${highlight(node.cod, terms)}</span>
+                <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
+            </div>
+            <h3 class="doc__title">${highlight(node.descricao, terms)}</h3>
+            <dl class="doc__fields">
+                <div><dt>${LABELS.vigencia}</dt><dd>${esc(formatPrazo(d.prazo_vigencia))}</dd></div>
+                <div><dt>${LABELS.arquivo}</dt><dd>${esc(formatPrazo(d.unidade_atribuicao_arquivistica))}</dd></div>
+            </dl>
+            ${d.obs ? `<p class="doc__obs"><strong>${LABELS.obs}:</strong> ${highlight(d.obs, terms)}</p>` : ''}
+        </article>`;
 }
 
-.crumbs__inner {
-    max-width: 1600px;
-    margin: 0 auto;
-    min-height: 44px;
-    padding: 0 16px;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    overflow-x: auto;
-    white-space: nowrap;
-    font-size: .8125rem;
-    scrollbar-width: thin;
+/* ---------- Visão em cascata (árvore de ramos) ---------- */
+
+function blockHtml(child, index, depth, selected) {
+    const navigable = hasKids(child);
+    const tag = navigable ? 'button' : 'div';
+    const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}" aria-expanded="${selected}"` : '';
+    const cod = hasNumericCode(child.cod) ? `<span class="nodeblk__cod">${esc(child.cod)}</span>` : '';
+    const count = navigable
+        ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` : '';
+
+    return `<${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>` +
+           `<span class="nodeblk__main">${cod}<span class="nodeblk__desc">${esc(child.descricao)}</span></span>${count}</${tag}>`;
 }
 
-.crumb {
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 26ch;
-    padding: 10px 4px;
-    border: 0;
-    background: none;
-    color: var(--primary);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+// Filhos de "parent" como um grupo de blocos; o filho aberto traz o próprio ramo dentro dele.
+function groupHtml(parent, depth) {
+    const kids = parent.filhos || [];
+    const next = activeSelectionPath[depth + 1];
+    const classes = `tg ${depth === 0 ? 'tg--root' : 'tg--child'}${kids.some(hasDoc) ? ' tg--docs' : ''}`;
+
+    const items = kids.map((child, i) => {
+        if (hasDoc(child)) return `<li class="tn tn--doc">${docHtml(child)}</li>`;
+        const open = child === next;
+        return `<li class="tn${open ? ' is-open' : ''}">${blockHtml(child, i, depth, open)}${open ? groupHtml(child, depth + 1) : ''}</li>`;
+    });
+
+    return `<ul class="${classes}">${items.join('')}</ul>`;
 }
 
-.crumb:hover { color: var(--perm); }
+function renderCascade() {
+    const wrap = $('cascadeWrapper');
+    wrap.innerHTML = groupHtml(activeSelectionPath[0], 0);
 
-.crumb--current {
-    max-width: 44ch;
-    color: var(--ink);
-    font-weight: 600;
-    text-decoration: none;
-    cursor: default;
-}
+    if (MOBILE_QUERY.matches) return;
 
-.crumb-sep {
-    flex: none;
-    color: var(--line-strong);
-}
-
-/* ---------- Visão em cascata: árvore de ramos ----------
-   Cada pasta é um bloco. Ao abrir, o ramo (.tg--child) aparece ao lado
-   (desktop) ou embaixo (celular), ligado por linhas de conexão. */
-
-.cascade {
-    flex: 1;
-    padding: 12px;
-}
-
-.tg {
-    display: flex;
-    flex-direction: column;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.tn {
-    position: relative;
-    padding-bottom: 8px;
-}
-
-.tn:last-child { padding-bottom: 0; }
-
-/* Ramo aberto (celular: recuado, com linha vertical) */
-.tg--child {
-    margin: 8px 0 0 6px;
-    padding-left: 10px;
-    border-left: 2px solid var(--line-strong);
-}
-
-/* Bloco de pasta */
-.nodeblk {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    min-height: 52px;
-    padding: 10px 12px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    text-align: left;
-}
-
-button.nodeblk:hover {
-    background: var(--hover);
-    border-color: var(--line-strong);
-}
-
-.nodeblk.is-selected,
-button.nodeblk.is-selected:hover {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: #fff;
-}
-
-.nodeblk__main {
-    flex: 1;
-    min-width: 0;
-}
-
-.nodeblk__cod {
-    display: block;
-    font-size: .75rem;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-}
-
-.nodeblk__desc {
-    display: block;
-    font-size: .9375rem;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-}
-
-.nodeblk__n {
-    flex: none;
-    min-width: 28px;
-    padding: 1px 7px;
-    background: var(--surface-alt);
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    font-size: .75rem;
-    color: var(--muted);
-    text-align: center;
-}
-
-.nodeblk.is-selected .nodeblk__cod { color: #c3d0e4; }
-
-.nodeblk.is-selected .nodeblk__n {
-    background: rgba(255, 255, 255, .16);
-    border-color: transparent;
-    color: #fff;
-}
-
-/* Conector que entra em cada bloco/documento de um ramo */
-.tg--child > .tn > .nodeblk::before,
-.tg--child > .tn > .doc::before {
-    content: "";
-    position: absolute;
-    top: 26px;
-    left: -10px;
-    width: 10px;
-    border-top: 2px solid var(--line-strong);
-}
-
-/* O caminho aberto fica destacado */
-.tg--child > .tn.is-open > .nodeblk::before { border-top-color: var(--primary); }
-
-/* ---------- Registro de documento ---------- */
-
-.doc {
-    position: relative;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--perm);
-    border-radius: var(--radius);
-    padding: 12px 14px;
-}
-
-.doc--elim { border-left-color: var(--elim); }
-
-.doc__top {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px 10px;
-}
-
-.doc__cod {
-    font-size: .8125rem;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-}
-
-.badge {
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: .75rem;
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.badge--perm { background: var(--perm-tint); color: var(--perm); }
-.badge--elim { background: var(--elim-tint); color: var(--elim); }
-
-.doc__title {
-    margin: 6px 0 12px;
-    font-size: 1rem;
-    font-weight: 600;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-}
-
-.doc__fields {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 16px;
-    margin: 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
-}
-
-.doc__fields dt {
-    font-size: .75rem;
-    color: var(--muted);
-}
-
-.doc__fields dd {
-    margin: 2px 0 0;
-    font-weight: 600;
-    overflow-wrap: anywhere;
-}
-
-.doc__obs {
-    margin: 10px 0 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
-    font-size: .8125rem;
-    color: var(--muted);
-    overflow-wrap: anywhere;
+    // garante que o ramo mais fundo apareça por inteiro na horizontal
+    const box = wrap.getBoundingClientRect();
+    const groups = wrap.querySelectorAll('.tg--child');
+    const deepest = groups[groups.length - 1];
+    if (deepest) {
+        const right = deepest.getBoundingClientRect().right - box.left + wrap.scrollLeft + 24;
+        if (right > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = right - wrap.clientWidth;
+    }
 }
 
 /* ---------- Visão em lista ---------- */
 
-.listview { padding: 12px; }
-
-.list-inner {
-    width: 100%;
-    max-width: 960px;
-    margin: 0 auto;
+function isOpen(node, level) {
+    return folderState.has(node._id) ? folderState.get(node._id) : level === 1;
 }
 
-.list-head {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding: 14px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
+function setAllFolders(node, open) {
+    (node.filhos || []).forEach((child) => {
+        if (hasKids(child) && !hasDoc(child)) folderState.set(child._id, open);
+        setAllFolders(child, open);
+    });
 }
 
-.list-head__title {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    line-height: 1.35;
+function listNodeHtml(node, level) {
+    if (hasDoc(node)) return docHtml(node);
+    if (!hasKids(node)) return '';
+
+    const open = isOpen(node, level);
+    const cod = hasNumericCode(node.cod) ? `<span class="folder__cod">${esc(node.cod)}</span>` : '';
+
+    return `
+        <section class="folder folder--l${Math.min(level, 3)}">
+            <button type="button" class="folder__head" data-toggle="${node._id}" aria-expanded="${open}">
+                <span class="folder__main">${cod}<span class="folder__name">${esc(node.descricao)}</span></span>
+                <span class="folder__count">${plural(node.filhos.length, 'item', 'itens')}</span>
+                <span class="folder__toggle" aria-hidden="true">${open ? '−' : '+'}</span>
+            </button>
+            ${open ? `<div class="folder__children">${node.filhos.map((c) => listNodeHtml(c, level + 1)).join('')}</div>` : ''}
+        </section>`;
 }
 
-.list-head__hint {
-    margin: 2px 0 0;
-    font-size: .8125rem;
-    color: var(--muted);
+function renderListView() {
+    if (searchTerms.length) return renderSearchResults();
+
+    const container = $('listViewWrapper');
+    const node = currentNode();
+    const title = node === treeData ? 'Todas as áreas' : node.descricao;
+
+    container.innerHTML = `
+        <div class="list-inner">
+            <div class="list-head">
+                <div>
+                    <h2 class="list-head__title">${esc(title)}</h2>
+                    <p class="list-head__hint">${plural(node._docs, 'documento', 'documentos')}. Use as pastas para abrir ou fechar cada grupo.</p>
+                </div>
+                <div class="list-actions">
+                    <button type="button" class="btn" data-action="expand">Expandir tudo</button>
+                    <button type="button" class="btn" data-action="collapse">Recolher tudo</button>
+                </div>
+            </div>
+            <div class="tree">${(node.filhos || []).map((c) => listNodeHtml(c, 1)).join('')}</div>
+        </div>`;
+
 }
 
-.list-actions {
-    display: flex;
-    gap: 8px;
+/* ---------- Busca: resultados aparecem na visão em lista ---------- */
+
+function resultHtml(doc) {
+    const folders = pathTo(doc).slice(1, -1).map((n) => esc(nodeLabel(n))).join(' › ');
+    return `
+        <div class="result">
+            <p class="result__path">${folders}</p>
+            ${docHtml(doc, searchTerms)}
+        </div>`;
 }
 
-.btn {
-    flex: 1;
-    min-height: 44px;
-    padding: 0 14px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius);
-    background: var(--surface);
-    font-size: .875rem;
-    font-weight: 600;
-}
-
-.btn:hover { background: var(--hover); }
-
-.tree {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.folder__head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    min-height: 48px;
-    padding: 8px 12px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: #eaeef4;
-    text-align: left;
-}
-
-.folder__head:hover { background: #e0e6ef; }
-
-.folder--l1 > .folder__head {
-    background: #dbe4f0;
-    border-color: #c4d1e3;
-}
-
-.folder--l1 > .folder__head:hover { background: #d0dceb; }
-
-.folder__main {
-    flex: 1;
-    min-width: 0;
-}
-
-.folder__cod {
-    display: block;
-    font-size: .75rem;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-}
-
-.folder__name {
-    display: block;
-    font-size: .9375rem;
-    font-weight: 600;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-}
-
-.folder__count {
-    flex: none;
-    font-size: .75rem;
-    color: var(--muted);
-    white-space: nowrap;
-}
-
-.folder__toggle {
-    flex: none;
-    width: 20px;
-    text-align: center;
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: var(--primary);
-}
-
-.folder__children {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 8px 0 0 8px;
-    padding-left: 10px;
-    border-left: 2px solid var(--line-strong);
-}
-
-/* ---------- Resultados da busca ---------- */
-
-.results {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.result__path {
-    margin: 0 0 4px;
-    font-size: .75rem;
-    line-height: 1.4;
-    color: var(--muted);
-    overflow-wrap: anywhere;
-}
-
-.result-group + .result-group { margin-top: 20px; }
-
-.result-group__title {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-    margin: 0 0 10px;
-    padding: 8px 12px;
-    background: var(--primary-tint);
-    border-left: 4px solid var(--primary);
-    border-radius: var(--radius);
-    color: var(--primary);
-    font-size: .875rem;
-    font-weight: 600;
-}
-
-.result-group__count {
-    flex: none;
-    color: var(--muted);
-    font-size: .8125rem;
-    font-weight: 400;
-    white-space: nowrap;
-}
-
-.result-group--none .result-group__title {
-    background: var(--surface-alt);
-    border-left-color: var(--line-strong);
-    color: var(--ink);
-}
-
-mark {
-    padding: 0 2px;
-    border-radius: 2px;
-    background: #ffe9a3;
-    color: inherit;
-}
-
-/* ---------- Mensagens ---------- */
-
-.notice {
-    max-width: 520px;
-    margin: 24px auto;
-    padding: 16px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--elim);
-    border-radius: var(--radius);
-}
-
-.notice--info { border-left-color: var(--primary); }
-
-.notice p { margin: 0 0 6px; }
-.notice p:last-child { margin-bottom: 0; }
-
-/* ==========================================================================
-   Desktop (>= 900px): aplicativo em tela cheia, colunas alinhadas ao topo,
-   cada coluna rola por conta própria.
-   ========================================================================== */
-
-@media (min-width: 900px) {
-
-    .app {
-        height: 100vh;
-        height: 100dvh;
-        min-height: 0;
+// Resultados em faixas de peso. Sem nenhuma palavra-chave entre os resultados, a lista segue plana.
+function resultsHtml() {
+    if (!searchResults.some((d) => d._weight > 0)) {
+        return `<div class="results">${searchResults.map(resultHtml).join('')}</div>`;
     }
 
-    .main {
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .site-header__inner {
-        flex-direction: row;
-        align-items: center;
-        justify-content: space-between;
-        gap: 24px;
-        padding: 12px 24px;
-    }
-
-    .tools {
-        flex-direction: row;
-        align-items: flex-start;
-        gap: 12px;
-    }
-
-    .seg {
-        display: inline-grid;
-        grid-template-columns: auto auto;
-    }
-
-    .seg__btn { min-height: 38px; }
-
-    .search { width: 340px; }
-
-    .search__input {
-        min-height: 38px;
-        font-size: .9375rem;
-    }
-
-    .crumbs__inner { padding: 0 24px; }
-
-    /* Cascata: tela rolável, ramos abrem à direita */
-
-    .cascade {
-        min-height: 0;
-        padding: 24px;
-        overflow: auto;
-        scrollbar-width: thin;
-    }
-
-    .tg { width: 264px; }
-    .tg--docs { width: 500px; }
-
-    .tg--child {
-        position: absolute;
-        top: 0;
-        left: calc(100% + 48px);
-        margin: 0;
-        padding: 0;
-        border-left: 0;
-    }
-
-    /* respiro à direita do último ramo, ao rolar */
-    .tg--child::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 100%;
-        width: 24px;
-        height: 1px;
-    }
-
-    /* linha vertical que liga os filhos */
-    .tg--child > .tn::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        left: -24px;
-        border-left: 2px solid var(--line-strong);
-    }
-
-    .tg--child > .tn:first-child::before { top: 26px; }
-
-    .tg--child > .tn:last-child::before {
-        bottom: auto;
-        height: 28px;
-    }
-
-    .tg--child > .tn:only-child::before { display: none; }
-
-    .tg--child > .tn > .nodeblk::before,
-    .tg--child > .tn > .doc::before {
-        left: -24px;
-        width: 24px;
-    }
-
-    /* linha que sai do bloco aberto em direção ao ramo */
-    .tn.is-open > .nodeblk::after {
-        content: "";
-        position: absolute;
-        top: 26px;
-        left: 100%;
-        width: 24px;
-        border-top: 2px solid var(--primary);
-    }
-
-    /* Lista */
-
-    .listview {
-        flex: 1;
-        min-height: 0;
-        padding: 16px 24px 32px;
-        overflow-y: auto;
-    }
-
-    .list-head {
-        flex-direction: row;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    .btn {
-        flex: none;
-        min-height: 38px;
-    }
-
-    .folder__children {
-        margin-left: 14px;
-        padding-left: 16px;
-    }
+    return PRIORITY_GROUPS.map((group) => {
+        const docs = searchResults.filter((d) => d._weight === group.weight);
+        if (!docs.length) return '';
+        return `
+            <section class="result-group result-group--${group.key}">
+                <h3 class="result-group__title">
+                    <span>${esc(group.label)}</span>
+                    <span class="result-group__count">${plural(docs.length, 'documento', 'documentos')}</span>
+                </h3>
+                <div class="results">${docs.map(resultHtml).join('')}</div>
+            </section>`;
+    }).join('');
 }
 
-/* Telas muito estreitas: campos do documento em uma coluna só */
-@media (max-width: 360px) {
-    .doc__fields { grid-template-columns: minmax(0, 1fr); }
-       }
+function renderSearchResults() {
+    const container = $('listViewWrapper');
+    const total = searchResults.length;
+    const typed = $('searchInput').value.trim();
+
+    const body = total
+        ? resultsHtml()
+        : `<div class="notice notice--info">
+               <p>Nenhum documento encontrado para <strong>“${esc(typed)}”</strong>.</p>
+               <p>Tente outro termo ou apenas parte do código.</p>
+           </div>`;
+
+    container.innerHTML = `
+        <div class="list-inner">
+            <div class="list-head">
+                <div>
+                    <h2 class="list-head__title">Resultados da busca</h2>
+                    <p class="list-head__hint">${plural(total, 'documento encontrado', 'documentos encontrados')} para “${esc(typed)}”.</p>
+                </div>
+                <div class="list-actions">
+                    <button type="button" class="btn" data-action="clear-search">Limpar busca</button>
+                </div>
+            </div>
+            ${body}
+        </div>`;
+
+    container.scrollTop = 0;
+}
+
+function clearSearch() {
+    $('searchInput').value = '';
+    handleSearch('');
+}
+
+function handleSearch(query) {
+    if (!treeData) return;
+    const status = $('searchStatus');
+    const terms = normalize(query).split(/\s+/).filter(Boolean);
+    searchTerms = terms;
+
+    if (!terms.length) {
+        searchResults = [];
+        status.textContent = '';
+        if (viewBeforeSearch) {
+            const previous = viewBeforeSearch;
+            viewBeforeSearch = null;
+            switchView(previous);
+        } else {
+            renderApp();
+        }
+        return;
+    }
+
+    searchResults = allDocs.filter((doc) => terms.every((t) => doc._search.includes(t)));
+    searchResults.sort((a, b) => b._weight - a._weight);
+    status.textContent = searchResults.length
+        ? plural(searchResults.length, 'resultado', 'resultados') + '.'
+        : 'Nenhum documento encontrado.';
+
+    if (currentView !== 'list') {
+        viewBeforeSearch = currentView;
+        switchView('list');
+    } else {
+        renderApp();
+    }
+                                         }
