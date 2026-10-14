@@ -1,70 +1,189 @@
+'use strict';
+
+/* ==========================================================================
+   Tabela de Temporalidade e Destinação de Documentos
+   ========================================================================== */
+
+// Textos exibidos nos registros. Ajuste aqui se precisar renomear algum campo.
+const LABELS = {
+    vigencia: 'Prazo de vigência',   // campo: documento.prazo_vigencia
+    arquivo: 'Prazo no arquivo',     // campo: documento.unidade_atribuicao_arquivistica
+    permanente: 'Guarda permanente',
+    eliminacao: 'Eliminação',
+    obs: 'Observações'
+};
+
+// Mesmo valor do breakpoint em style.css (900px)
+const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
+
 let treeData = null;
 let activeSelectionPath = [];
 let currentView = 'cascade';
-let collapsedFolders = new Set();
+let hitNode = null;            // documento encontrado pela busca (destacado)
+let pendingCenter = false;     // centraliza o resultado da busca na próxima renderização
+let lastRenderedDepth = -1;
 
-document.addEventListener("DOMContentLoaded", () => {
+const allDocs = [];            // todos os documentos, na ordem da árvore (usado na busca)
+const folderState = new Map(); // modo lista: id da pasta -> aberta (true) ou fechada (false)
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------- Utilidades ---------- */
+
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+function normalize(text) {
+    return String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+const hasDoc = (node) => node.documento !== null && node.documento !== undefined;
+const hasKids = (node) => Array.isArray(node.filhos) && node.filhos.length > 0;
+const hasNumericCode = (cod) => /\d/.test(cod || '');
+
+function nodeLabel(node) {
+    return hasNumericCode(node.cod) ? `${node.cod} – ${node.descricao}` : node.descricao;
+}
+
+function formatPrazo(value) {
+    const t = String(value ?? '').trim();
+    if (!t || t === '-') return '—';
+    if (/^\d+$/.test(t)) return `${t} ${t === '1' ? 'ano' : 'anos'}`;
+    return t;
+}
+
+function plural(n, one, many) {
+    return `${n.toLocaleString('pt-BR')} ${n === 1 ? one : many}`;
+}
+
+// Dá um id a cada nó, guarda o pai e prepara o texto de busca.
+function indexTree(node, parent = null) {
+    node._parent = parent;
+    node._id = String(indexTree.counter++);
+    if (hasDoc(node)) {
+        node._search = normalize(`${node.cod} ${node.descricao} ${node.documento.obs || ''}`);
+        allDocs.push(node);
+    }
+    node._docs = hasDoc(node) ? 1 : 0;
+    (node.filhos || []).forEach((child) => {
+        indexTree(child, node);
+        node._docs += child._docs;
+    });
+}
+indexTree.counter = 0;
+
+function pathTo(node) {
+    const path = [];
+    for (let n = node; n; n = n._parent) path.unshift(n);
+    return path;
+}
+
+function currentNode() {
+    return activeSelectionPath[activeSelectionPath.length - 1];
+}
+
+/* ---------- Carga dos dados ---------- */
+
+document.addEventListener('DOMContentLoaded', () => {
+    bindEvents();
+    $('cascadeWrapper').innerHTML = '<div class="notice notice--info"><p>Carregando tabela…</p></div>';
+
     fetch('arvore_temporalidade.json')
-        .then(response => {
-            if (!response.ok) throw new Error("Erro ao carregar o arquivo JSON.");
+        .then((response) => {
+            if (!response.ok) throw new Error('Erro ao carregar o arquivo JSON.');
             return response.json();
         })
-        .then(data => {
+        .then((data) => {
             treeData = data;
+            indexTree(treeData);
             activeSelectionPath = [treeData];
             switchView('cascade');
         })
-        .catch(error => {
+        .catch((error) => {
             console.error(error);
-            document.getElementById('cascadeWrapper').innerHTML = `
-                <div class="bg-red-50 border border-red-200 p-6 rounded-xl text-center text-red-700 text-sm mx-auto my-12">
-                    Nao foi possivel carregar o arquivo <strong>arvore_temporalidade.json</strong>.
-                </div>
-            `;
+            $('breadcrumbBar').innerHTML = '';
+            $('cascadeWrapper').innerHTML = `
+                <div class="notice">
+                    <p><strong>Não foi possível carregar a tabela.</strong></p>
+                    <p>Verifique se o arquivo <em>arvore_temporalidade.json</em> está na mesma pasta do site e abra a página por um servidor (por exemplo, <em>python -m http.server</em>), não direto pelo arquivo.</p>
+                </div>`;
         });
 });
 
+/* ---------- Eventos ---------- */
+
+function bindEvents() {
+    $('btnViewCascade').addEventListener('click', () => switchView('cascade'));
+    $('btnViewList').addEventListener('click', () => switchView('list'));
+
+    let timer = null;
+    $('searchInput').addEventListener('input', (e) => {
+        clearTimeout(timer);
+        const value = e.target.value;
+        timer = setTimeout(() => handleSearch(value), 200);
+    });
+
+    $('breadcrumbBar').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-depth]');
+        if (btn) jumpToDepth(Number(btn.dataset.depth));
+    });
+
+    $('cascadeWrapper').addEventListener('click', (e) => {
+        const close = e.target.closest('[data-close]');
+        if (close) return closeColumn(Number(close.dataset.close));
+
+        const item = e.target.closest('[data-idx]');
+        if (!item) return;
+        const depth = Number(item.dataset.depth);
+        const child = activeSelectionPath[depth].filhos[Number(item.dataset.idx)];
+        activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
+        if (hasKids(child)) activeSelectionPath.push(child);
+        renderApp();
+    });
+
+    $('listViewWrapper').addEventListener('click', (e) => {
+        const toggle = e.target.closest('[data-toggle]');
+        if (toggle) {
+            const id = toggle.dataset.toggle;
+            folderState.set(id, toggle.getAttribute('aria-expanded') !== 'true');
+            return renderListView();
+        }
+        const action = e.target.closest('[data-action]');
+        if (!action) return;
+        setAllFolders(currentNode(), action.dataset.action === 'expand');
+        renderListView();
+    });
+
+    const onBreakpoint = () => { if (treeData) renderApp(); };
+    if (MOBILE_QUERY.addEventListener) MOBILE_QUERY.addEventListener('change', onBreakpoint);
+    else MOBILE_QUERY.addListener(onBreakpoint);
+}
+
+/* ---------- Navegação ---------- */
+
 function switchView(view) {
     currentView = view;
-    const btnCascade = document.getElementById('btnViewCascade');
-    const btnList = document.getElementById('btnViewList');
-    
-    const cascadeWrapper = document.getElementById('cascadeWrapper');
-    const listViewWrapper = document.getElementById('listViewWrapper');
+    const isCascade = view === 'cascade';
 
-    btnCascade.className = "px-3 py-1.5 text-xs font-bold rounded-lg transition text-slate-300 hover:text-white";
-    btnList.className = "px-3 py-1.5 text-xs font-bold rounded-lg transition text-slate-300 hover:text-white";
+    $('btnViewCascade').classList.toggle('is-active', isCascade);
+    $('btnViewCascade').setAttribute('aria-pressed', String(isCascade));
+    $('btnViewList').classList.toggle('is-active', !isCascade);
+    $('btnViewList').setAttribute('aria-pressed', String(!isCascade));
 
-    cascadeWrapper.classList.add('hidden');
-    listViewWrapper.classList.add('hidden');
+    $('cascadeWrapper').hidden = !isCascade;
+    $('listViewWrapper').hidden = isCascade;
 
-    if (view === 'cascade') {
-        btnCascade.className = "px-3 py-1.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow-sm";
-        cascadeWrapper.classList.remove('hidden');
-    } else if (view === 'list') {
-        btnList.className = "px-3 py-1.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow-sm";
-        listViewWrapper.classList.remove('hidden');
-    }
     renderApp();
 }
 
 function renderApp() {
     renderBreadcrumb();
     if (currentView === 'cascade') renderCascade();
-    else if (currentView === 'list') renderListView();
-}
-
-function renderBreadcrumb() {
-    const bar = document.getElementById('breadcrumbBar');
-    bar.innerHTML = '';
-    let html = `<span class="font-semibold text-slate-400">Trilha:</span>`;
-    activeSelectionPath.forEach((node, index) => {
-        const isLast = index === activeSelectionPath.length - 1;
-        const name = index === 0 ? "Inicio" : `${node.cod} - ${node.descricao}`;
-        if (isLast) html += `<span class="text-emerald-400 font-bold px-1">${name}</span>`;
-        else html += `<button onclick="jumpToDepth(${index})" class="text-slate-300 hover:text-white hover:underline px-1">${name}</button> <span class="text-slate-500">/</span> `;
-    });
-    bar.innerHTML = html;
+    else renderListView();
+    pendingCenter = false;
 }
 
 function jumpToDepth(depth) {
@@ -72,238 +191,223 @@ function jumpToDepth(depth) {
     renderApp();
 }
 
-// 1. MODO CASCATA (Consolidado)
-function renderCascade() {
-    const wrapper = document.getElementById('cascadeWrapper');
-    wrapper.innerHTML = '';
-    const lastNode = activeSelectionPath[activeSelectionPath.length - 1];
-    const isTerminalDocLevel = lastNode && lastNode.filhos && lastNode.filhos.length > 0 && lastNode.filhos.every(c => c.documento !== null && c.documento !== undefined);
-
-    const isMobile = window.innerWidth <= 768;
-    if (isTerminalDocLevel && !isMobile) {
-        const ghostSpacer = document.createElement('div');
-        ghostSpacer.className = "flex-shrink-0";
-        let previousColumnsWidth = (activeSelectionPath.length - 1) * 344;
-        ghostSpacer.style.width = `calc(50vw - 360px - ${previousColumnsWidth / 2}px)`;
-        wrapper.appendChild(ghostSpacer);
-    }
-
-    activeSelectionPath.forEach((parentNode, depth) => {
-        const children = parentNode.filhos || [];
-        if (children.length === 0 && depth > 0) return;
-        const isDocLevel = children.some(c => c.documento !== null && c.documento !== undefined);
-        const column = document.createElement('div');
-        
-        if (isDocLevel) {
-            column.className = "flex-shrink-0 w-[720px] bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 flex flex-col transition-all relative my-auto";
-        } else {
-            column.className = "flex-shrink-0 w-80 bg-white rounded-2xl shadow-md border border-slate-200 flex flex-col transition-all relative";
-            if (!isMobile) column.style.marginTop = `${depth * 40}px`;
-        }
-
-        const headerTitle = depth === 0 ? "Selecione a Area" : `Nivel ${depth} (${parentNode.cod})`;
-        let closeButtonHtml = depth > 0 ? `<button onclick="closeColumn(${depth})" class="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded transition hover:bg-slate-700">&times;</button>` : '';
-
-        column.innerHTML = `
-            <div class="${isDocLevel ? 'bg-emerald-700' : 'bg-slate-800'} text-white px-4 py-3 flex justify-between items-center rounded-t-2xl">
-                <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold uppercase tracking-wider">${headerTitle}</span>
-                    <span class="text-[10px] bg-black/20 text-white px-2 py-0.5 rounded-full">${children.length} itens</span>
-                </div>
-                ${closeButtonHtml}
-            </div>
-            <div class="p-4 space-y-4">
-        `;
-
-        const listContainer = column.querySelector('.space-y-4');
-        children.forEach(child => {
-            const isDoc = child.documento !== null && child.documento !== undefined;
-            const isSelected = activeSelectionPath[depth + 1] && activeSelectionPath[depth + 1].cod === child.cod;
-            const card = document.createElement('div');
-            
-            if (isDoc) {
-                const docInfo = child.documento;
-                const isPerm = !docInfo.eliminacao;
-                const cardBgClass = isPerm ? "bg-blue-50/70 border-blue-200" : "bg-red-50/70 border-red-200";
-                const badgeDestClass = isPerm ? "bg-blue-600 text-white" : "bg-red-600 text-white";
-                card.className = `p-4 rounded-xl border ${cardBgClass} shadow-sm space-y-3 text-xs`;
-                card.innerHTML = `
-                    <div class="flex items-center justify-between border-b border-slate-200 pb-2">
-                        <span class="font-mono text-xs px-2.5 py-0.5 rounded font-bold bg-slate-800 text-white">${child.cod}</span>
-                        <span class="text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider bg-slate-200 text-slate-700">Documento</span>
-                    </div>
-                    <h4 class="font-extrabold text-slate-900 text-sm md:text-base">${child.descricao}</h4>
-                    <div class="grid grid-cols-12 gap-3 items-center pt-2 border-t border-slate-200">
-                        <div class="col-span-4 flex flex-col justify-center px-1">
-                            <span class="text-slate-500 uppercase font-bold text-[9px]">Produtora</span>
-                            <span class="font-bold text-slate-900 text-sm">${docInfo.prazo_vigencia || 'N/A'}</span>
-                        </div>
-                        <div class="col-span-4 flex flex-col justify-center px-2 border-l border-slate-200">
-                            <span class="text-slate-500 uppercase font-bold text-[9px]">Arquivo</span>
-                            <span class="font-bold text-slate-900 text-sm">${docInfo.unidade_atribuicao_arquivistica || 'N/A'}</span>
-                        </div>
-                        <div class="col-span-4 flex flex-col justify-end items-end px-1 border-l border-slate-200">
-                            <span class="text-slate-500 uppercase font-bold text-[9px] mb-1">Destinacao</span>
-                            <span class="px-2.5 py-1 rounded-lg font-extrabold text-xs uppercase tracking-wider ${badgeDestClass}">${isPerm ? 'permanente' : 'eliminacao'}</span>
-                        </div>
-                    </div>
-                `;
-            } else {
-                card.className = `p-3 rounded-xl border transition cursor-pointer flex flex-col justify-between ${isSelected ? 'bg-slate-200 border-slate-500 font-semibold' : 'bg-slate-50 border-slate-200 hover:border-emerald-400 hover:bg-white'}`;
-                card.innerHTML = `
-                    <div class="flex items-center justify-between mb-1">
-                        <span class="font-mono text-xs px-2 py-0.5 rounded font-bold ${isSelected ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'}">${child.cod}</span>
-                        <span class="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-200 text-slate-600">Pasta</span>
-                    </div>
-                    <h4 class="font-semibold text-slate-800 text-xs">${child.descricao}</h4>
-                `;
-                card.onclick = () => {
-                    activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
-                    if (child.filhos && child.filhos.length > 0) activeSelectionPath.push(child);
-                    renderApp();
-                };
-            }
-            listContainer.appendChild(card);
-        });
-        wrapper.appendChild(column);
-    });
-
-    if (!isMobile) {
-        setTimeout(() => {
-            const lastChild = wrapper.lastElementChild;
-            if (lastChild) lastChild.scrollIntoView({ behavior: 'smooth', inline: isTerminalDocLevel ? 'center' : 'end', block: 'nearest' });
-        }, 80);
-    }
-}
-
-// 2. MODO LISTA (Consolidado)
-function renderListView() {
-    const container = document.getElementById('listViewWrapper');
-    container.innerHTML = '';
-    const currentNode = activeSelectionPath[activeSelectionPath.length - 1];
-
-    const headerBox = document.createElement('div');
-    headerBox.className = "bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4";
-    headerBox.innerHTML = `
-        <div>
-            <span class="text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-600 px-2.5 py-1 rounded-md">Modo Lista - Filtro Suave</span>
-            <h2 class="text-lg font-extrabold text-slate-900 mt-2">${currentNode.descricao}</h2>
-            <p class="text-xs text-slate-500 mt-0.5">Clique em "Recolher / Expandir" nas pastas abaixo para filtrar a visualizacao.</p>
-        </div>
-        <div class="flex gap-2">
-            <button id="btnExpandAll" class="px-3 py-1.5 text-xs font-bold bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700">Expandir Tudo</button>
-            <button id="btnCollapseAll" class="px-3 py-1.5 text-xs font-bold bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700">Recolher Tudo</button>
-        </div>
-    `;
-    container.appendChild(headerBox);
-
-    document.getElementById('btnExpandAll').onclick = () => expandAllFolders();
-    document.getElementById('btnCollapseAll').onclick = () => collapseAllFolders(currentNode);
-
-    const treeContainer = document.createElement('div');
-    treeContainer.className = "space-y-3";
-    container.appendChild(treeContainer);
-
-    function buildAccordionNode(node, level = 0) {
-        const wrapperDiv = document.createElement('div');
-        wrapperDiv.className = "space-y-2";
-        const hasChildren = node.filhos && node.filhos.length > 0;
-        const isCollapsed = collapsedFolders.has(node.cod);
-
-        if (node.documento) {
-            const docInfo = node.documento;
-            const isPerm = !docInfo.eliminacao;
-            const cardBgClass = isPerm ? "bg-blue-50/70 border-blue-200" : "bg-red-50/70 border-red-200";
-            const badgeDestClass = isPerm ? "bg-blue-600 text-white" : "bg-red-600 text-white";
-
-            const card = document.createElement('div');
-            card.className = `p-4 rounded-xl border ${cardBgClass} shadow-sm space-y-3 text-xs ml-${Math.min(level * 4, 12)}`;
-            card.innerHTML = `
-                <div class="flex items-center justify-between border-b border-slate-200 pb-2">
-                    <span class="font-mono text-xs px-2.5 py-0.5 rounded font-bold bg-slate-800 text-white">${node.cod}</span>
-                    <span class="text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider bg-slate-200 text-slate-700">Documento</span>
-                </div>
-                <h4 class="font-extrabold text-slate-900 text-sm">${node.descricao}</h4>
-                <div class="grid grid-cols-12 gap-3 items-center pt-2 border-t border-slate-200">
-                    <div class="col-span-4 flex flex-col justify-center px-1">
-                        <span class="text-slate-500 uppercase font-bold text-[9px]">Produtora</span>
-                        <span class="font-bold text-slate-900 text-sm">${docInfo.prazo_vigencia || 'N/A'}</span>
-                    </div>
-                    <div class="col-span-4 flex flex-col justify-center px-2 border-l border-slate-200">
-                        <span class="text-slate-500 uppercase font-bold text-[9px]">Arquivo</span>
-                        <span class="font-bold text-slate-900 text-sm">${docInfo.unidade_atribuicao_arquivistica || 'N/A'}</span>
-                    </div>
-                    <div class="col-span-4 flex flex-col justify-end items-end px-1 border-l border-slate-200">
-                        <span class="text-slate-500 uppercase font-bold text-[9px] mb-1">Destinacao</span>
-                        <span class="px-2.5 py-1 rounded-lg font-extrabold text-xs uppercase tracking-wider ${badgeDestClass}">${isPerm ? 'permanente' : 'eliminacao'}</span>
-                    </div>
-                </div>
-            `;
-            wrapperDiv.appendChild(card);
-        } else if (hasChildren && level > 0) {
-            const folderHeader = document.createElement('div');
-            folderHeader.className = "bg-slate-800 text-white p-3 rounded-xl flex justify-between items-center cursor-pointer shadow-sm hover:bg-slate-700";
-            folderHeader.innerHTML = `
-                <div class="flex items-center gap-3">
-                    <span class="font-mono text-xs px-2 py-0.5 rounded font-bold bg-slate-700 text-slate-200">${node.cod}</span>
-                    <h3 class="font-bold text-xs uppercase tracking-wider">${node.descricao}</h3>
-                </div>
-                <div class="flex items-center gap-2">
-                    <span class="text-[10px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full">${node.filhos.length} itens</span>
-                    <span class="text-xs font-bold px-2 py-0.5 rounded bg-slate-700 text-slate-300">${isCollapsed ? '+' : '-'}</span>
-                </div>
-            `;
-            folderHeader.onclick = () => {
-                if (collapsedFolders.has(node.cod)) collapsedFolders.delete(node.cod);
-                else collapsedFolders.add(node.cod);
-                renderListView();
-            };
-            wrapperDiv.appendChild(folderHeader);
-
-            if (!isCollapsed) {
-                const childrenWrapper = document.createElement('div');
-                childrenWrapper.className = "pl-4 space-y-2 border-l-2 border-slate-300 ml-2 pt-2";
-                node.filhos.forEach(child => childrenWrapper.appendChild(buildAccordionNode(child, level + 1)));
-                wrapperDiv.appendChild(childrenWrapper);
-            }
-        } else if (hasChildren && level === 0) {
-            node.filhos.forEach(child => wrapperDiv.appendChild(buildAccordionNode(child, level + 1)));
-        }
-        return wrapperDiv;
-    }
-
-    if (currentNode.filhos) currentNode.filhos.forEach(child => treeContainer.appendChild(buildAccordionNode(child, 1)));
-}
-
-function expandAllFolders() { collapsedFolders.clear(); renderListView(); }
-function collapseAllFolders(node) {
-    function addAll(n) { if (n.cod) collapsedFolders.add(n.cod); if (n.filhos) n.filhos.forEach(addAll); }
-    addAll(node); renderListView();
-}
-
 function closeColumn(depth) {
     activeSelectionPath = activeSelectionPath.slice(0, depth);
     renderApp();
 }
 
-function handleSearch(query) {
-    if (!query.trim() || !treeData) return;
-    let q = query.toLowerCase();
-    function findPath(node, targetQuery, currentPath = []) {
-        const fullPath = [...currentPath, node];
-        let matchText = (node.cod + ' ' + node.descricao + ' ' + (node.documento?.obs || '')).toLowerCase();
-        if (matchText.includes(targetQuery) && node.documento) return fullPath;
-        if (node.filhos) {
-            for (let child of node.filhos) {
-                let found = findPath(child, targetQuery, fullPath);
-                if (found) return found;
-            }
+function renderBreadcrumb() {
+    const bar = $('breadcrumbBar');
+    const last = activeSelectionPath.length - 1;
+
+    bar.innerHTML = activeSelectionPath.map((node, i) => {
+        const name = i === 0 ? 'Início' : nodeLabel(node);
+        if (i === last) {
+            return `<span class="crumb crumb--current" title="${esc(name)}" aria-current="page">${esc(name)}</span>`;
         }
-        return null;
+        return `<button type="button" class="crumb" data-depth="${i}" title="${esc(name)}">${esc(name)}</button>` +
+               '<span class="crumb-sep" aria-hidden="true">/</span>';
+    }).join('');
+
+    bar.scrollLeft = bar.scrollWidth;
+}
+
+/* ---------- Registro de documento (usado nas duas visões) ---------- */
+
+function docHtml(node) {
+    const d = node.documento;
+    const perm = !d.eliminacao;
+    const classes = `doc${perm ? '' : ' doc--elim'}${node === hitNode ? ' is-hit' : ''}`;
+
+    return `
+        <article class="${classes}">
+            <div class="doc__top">
+                <span class="doc__cod">${esc(node.cod)}</span>
+                <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
+            </div>
+            <h3 class="doc__title">${esc(node.descricao)}</h3>
+            <dl class="doc__fields">
+                <div><dt>${LABELS.vigencia}</dt><dd>${esc(formatPrazo(d.prazo_vigencia))}</dd></div>
+                <div><dt>${LABELS.arquivo}</dt><dd>${esc(formatPrazo(d.unidade_atribuicao_arquivistica))}</dd></div>
+            </dl>
+            ${d.obs ? `<p class="doc__obs"><strong>${LABELS.obs}:</strong> ${esc(d.obs)}</p>` : ''}
+        </article>`;
+}
+
+/* ---------- Visão em cascata ---------- */
+
+function itemHtml(child, index, depth, selected) {
+    const navigable = hasKids(child);
+    const tag = navigable ? 'button' : 'div';
+    const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}"` : '';
+    const cod = depth > 0 && hasNumericCode(child.cod)
+        ? `<span class="item__cod">${esc(child.cod)}</span>` : '';
+
+    return `
+        <${tag} class="item${selected ? ' is-selected' : ''}"${attrs}${selected ? ' aria-current="true"' : ''}>
+            <span class="item__main">${cod}<span class="item__desc">${esc(child.descricao)}</span></span>
+            ${navigable ? '<span class="item__chev" aria-hidden="true">›</span>' : ''}
+        </${tag}>`;
+}
+
+function columnHtml(parent, depth, mobile) {
+    const children = parent.filhos || [];
+    const isDocLevel = children.some(hasDoc);
+    const next = activeSelectionPath[depth + 1];
+    const title = depth === 0 ? 'Áreas' : parent.descricao;
+
+    let back = '';
+    let close = '';
+    if (depth > 0) {
+        if (mobile) back = `<button type="button" class="col__back" data-close="${depth}">‹ Voltar</button>`;
+        else close = `<button type="button" class="col__close" data-close="${depth}" aria-label="Fechar esta coluna" title="Fechar">&times;</button>`;
     }
-    let matchedPath = findPath(treeData, q);
-    if (matchedPath) {
-        activeSelectionPath = matchedPath;
-        renderApp();
+
+    const body = children.map((child, i) => (
+        hasDoc(child) ? docHtml(child) : itemHtml(child, i, depth, child === next)
+    )).join('');
+
+    return `
+        <section class="col${isDocLevel ? ' col--docs' : ''}" data-key="${parent._id}">
+            <div class="col__head">
+                ${back}
+                <h2 class="col__title">${esc(title)}</h2>
+                <span class="col__count">${plural(children.length, 'item', 'itens')}</span>
+                ${close}
+            </div>
+            <div class="col__body${isDocLevel ? ' col__body--docs' : ''}">${body}</div>
+        </section>`;
+}
+
+function centerIn(container, el) {
+    container.scrollTop = el.offsetTop - (container.clientHeight - el.offsetHeight) / 2;
+}
+
+function renderCascade() {
+    const wrap = $('cascadeWrapper');
+    const mobile = MOBILE_QUERY.matches;
+    const lastDepth = activeSelectionPath.length - 1;
+
+    // Guarda a rolagem de cada coluna para não "pular" ao clicar
+    const savedScroll = new Map();
+    wrap.querySelectorAll('.col').forEach((col) => {
+        savedScroll.set(col.dataset.key, col.querySelector('.col__body').scrollTop);
+    });
+
+    let html = '';
+    activeSelectionPath.forEach((parent, depth) => {
+        if (mobile && depth !== lastDepth) return;   // celular: só a coluna atual
+        if (!hasKids(parent) && depth > 0) return;
+        html += columnHtml(parent, depth, mobile);
+    });
+    wrap.innerHTML = html;
+
+    if (mobile) {
+        const hit = wrap.querySelector('.is-hit');
+        if (pendingCenter && hit) {
+            hit.scrollIntoView({ block: 'center' });
+        } else if (lastRenderedDepth !== lastDepth) {
+            const top = wrap.getBoundingClientRect().top + window.scrollY - 8;
+            if (window.scrollY > top) window.scrollTo(0, Math.max(top, 0));
+        }
+    } else {
+        wrap.querySelectorAll('.col').forEach((col) => {
+            const body = col.querySelector('.col__body');
+            const target = body.querySelector('.is-hit') || body.querySelector('.is-selected');
+            if (pendingCenter && target) centerIn(body, target);
+            else body.scrollTop = savedScroll.get(col.dataset.key) || 0;
+        });
+        wrap.scrollLeft = wrap.scrollWidth;
     }
+
+    lastRenderedDepth = lastDepth;
+}
+
+/* ---------- Visão em lista ---------- */
+
+function isOpen(node, level) {
+    return folderState.has(node._id) ? folderState.get(node._id) : level === 1;
+}
+
+function setAllFolders(node, open) {
+    (node.filhos || []).forEach((child) => {
+        if (hasKids(child) && !hasDoc(child)) folderState.set(child._id, open);
+        setAllFolders(child, open);
+    });
+}
+
+function listNodeHtml(node, level) {
+    if (hasDoc(node)) return docHtml(node);
+    if (!hasKids(node)) return '';
+
+    const open = isOpen(node, level);
+    const cod = hasNumericCode(node.cod) ? `<span class="folder__cod">${esc(node.cod)}</span>` : '';
+
+    return `
+        <section class="folder folder--l${Math.min(level, 3)}">
+            <button type="button" class="folder__head" data-toggle="${node._id}" aria-expanded="${open}">
+                <span class="folder__main">${cod}<span class="folder__name">${esc(node.descricao)}</span></span>
+                <span class="folder__count">${plural(node.filhos.length, 'item', 'itens')}</span>
+                <span class="folder__toggle" aria-hidden="true">${open ? '−' : '+'}</span>
+            </button>
+            ${open ? `<div class="folder__children">${node.filhos.map((c) => listNodeHtml(c, level + 1)).join('')}</div>` : ''}
+        </section>`;
+}
+
+function renderListView() {
+    const container = $('listViewWrapper');
+    const node = currentNode();
+    const title = node === treeData ? 'Todas as áreas' : node.descricao;
+
+    container.innerHTML = `
+        <div class="list-inner">
+            <div class="list-head">
+                <div>
+                    <h2 class="list-head__title">${esc(title)}</h2>
+                    <p class="list-head__hint">${plural(node._docs, 'documento', 'documentos')}. Use as pastas para abrir ou fechar cada grupo.</p>
+                </div>
+                <div class="list-actions">
+                    <button type="button" class="btn" data-action="expand">Expandir tudo</button>
+                    <button type="button" class="btn" data-action="collapse">Recolher tudo</button>
+                </div>
+            </div>
+            <div class="tree">${(node.filhos || []).map((c) => listNodeHtml(c, 1)).join('')}</div>
+        </div>`;
+
+    if (pendingCenter) {
+        const hit = container.querySelector('.is-hit');
+        if (hit) hit.scrollIntoView({ block: 'center' });
+    }
+}
+
+/* ---------- Busca ---------- */
+
+function handleSearch(query) {
+    if (!treeData) return;
+    const status = $('searchStatus');
+    const q = normalize(query.trim());
+
+    if (!q) {
+        status.textContent = '';
+        if (hitNode) { hitNode = null; renderApp(); }
+        return;
+    }
+
+    const results = allDocs.filter((doc) => doc._search.includes(q));
+    if (!results.length) {
+        status.textContent = 'Nenhum documento encontrado.';
+        return;
+    }
+
+    const first = results[0];
+    const path = pathTo(first);
+    status.textContent = results.length === 1
+        ? '1 resultado.'
+        : `${results.length.toLocaleString('pt-BR')} resultados. Exibindo o primeiro.`;
+
+    hitNode = first;
+    activeSelectionPath = path.slice(0, -1);               // termina na pasta que contém o documento
+    path.slice(1, -1).forEach((n) => folderState.set(n._id, true)); // abre as pastas no modo lista
+    pendingCenter = true;
+    renderApp();
 }

@@ -2,57 +2,48 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Navegador - Tabela de Temporalidade</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tabela de Temporalidade e Destinação de Documentos</title>
     <link rel="stylesheet" href="style.css">
 </head>
-<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col font-sans overflow-x-hidden">
+<body>
+    <div class="app">
 
-    <!-- Cabeçalho Principal -->
-    <header class="bg-slate-900 text-white shadow-xl border-b border-slate-800 sticky top-0 z-50 w-full">
-        <div class="max-w-7xl mx-auto px-4 md:px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
-            <div>
-                <h1 class="text-lg md:text-xl font-bold tracking-tight text-center md:text-left">
-                    Sistema de Gestao Documental - TTD
-                </h1>
-                <p class="text-xs text-slate-400 mt-0.5 text-center md:text-left">Tabela de Temporalidade e Destinacao de Documentos</p>
-            </div>
-
-            <!-- Alternador de Views e Busca -->
-            <div class="flex flex-col md:flex-row items-center gap-3 w-full md:w-auto">
-                <div class="bg-slate-800 p-1 rounded-xl flex flex-wrap border border-slate-700 w-full md:w-auto justify-center gap-1">
-                    <button id="btnViewCascade" onclick="switchView('cascade')" class="px-3 py-1.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow-sm">
-                        Modo Cascata
-                    </button>
-                    <button id="btnViewList" onclick="switchView('list')" class="px-3 py-1.5 text-xs font-bold rounded-lg transition text-slate-300 hover:text-white">
-                        Modo Lista
-                    </button>
+        <header class="site-header">
+            <div class="site-header__inner">
+                <div class="brand">
+                    <h1 class="brand__title">Sistema de Gestão Documental</h1>
+                    <p class="brand__sub">Tabela de Temporalidade e Destinação de Documentos</p>
                 </div>
-                <div class="w-full md:w-64 relative">
-                    <input type="text" 
-                           id="searchInput" 
-                           oninput="handleSearch(this.value)" 
-                           placeholder="Busca rapida..." 
-                           class="w-full px-3 py-2 bg-slate-800 text-sm rounded-lg border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500 shadow-inner">
+
+                <div class="tools">
+                    <div class="seg" role="group" aria-label="Modo de visualização">
+                        <button id="btnViewCascade" type="button" class="seg__btn is-active" aria-pressed="true">Cascata</button>
+                        <button id="btnViewList" type="button" class="seg__btn" aria-pressed="false">Lista</button>
+                    </div>
+                    <div class="search">
+                        <input id="searchInput"
+                               class="search__input"
+                               type="search"
+                               placeholder="Buscar por código ou descrição"
+                               aria-label="Buscar por código ou descrição"
+                               autocomplete="off">
+                        <p id="searchStatus" class="search__status" role="status"></p>
+                    </div>
                 </div>
             </div>
-        </div>
+        </header>
 
-        <!-- Trilha (Breadcrumbs) -->
-        <div id="breadcrumbBar" class="bg-slate-800/90 border-t border-slate-700/60 px-4 md:px-6 py-2 text-xs text-slate-300 flex items-center gap-2 overflow-x-auto whitespace-nowrap"></div>
-    </header>
+        <nav class="crumbs" aria-label="Trilha de navegação">
+            <div id="breadcrumbBar" class="crumbs__inner"></div>
+        </nav>
 
-    <!-- Conteúdo Principal -->
-    <main class="w-full flex-grow relative flex flex-col min-h-[calc(100vh-113px)]">
-        
-        <!-- View Cascata (Consolidada) -->
-        <div id="cascadeWrapper" class="cascade-container flex items-start gap-4 md:gap-6 overflow-x-auto pb-16 px-6 pt-8 w-full scroll-smooth flex-grow"></div>
+        <main class="main">
+            <div id="cascadeWrapper" class="cascade"></div>
+            <div id="listViewWrapper" class="listview" hidden></div>
+        </main>
 
-        <!-- View Lista (Consolidada) -->
-        <div id="listViewWrapper" class="hidden max-w-5xl mx-auto w-full space-y-4 py-8 px-4 pb-16 flex-grow"></div>
-
-    </main>
+    </div>
 
     <script src="app.js"></script>
 </body>
