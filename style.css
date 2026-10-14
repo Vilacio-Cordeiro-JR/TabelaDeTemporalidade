@@ -325,11 +325,6 @@ button.nodeblk.is-selected:hover {
 
 .doc--elim { border-left-color: var(--elim); }
 
-.doc.is-hit {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-}
-
 .doc__top {
     display: flex;
     flex-wrap: wrap;
@@ -517,6 +512,29 @@ button.nodeblk.is-selected:hover {
     border-left: 2px solid var(--line-strong);
 }
 
+/* ---------- Resultados da busca ---------- */
+
+.results {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.result__path {
+    margin: 0 0 4px;
+    font-size: .75rem;
+    line-height: 1.4;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+mark {
+    padding: 0 2px;
+    border-radius: 2px;
+    background: #ffe9a3;
+    color: inherit;
+}
+
 /* ---------- Mensagens ---------- */
 
 .notice {
@@ -677,4 +695,4 @@ button.nodeblk.is-selected:hover {
 /* Telas muito estreitas: campos do documento em uma coluna só */
 @media (max-width: 360px) {
     .doc__fields { grid-template-columns: minmax(0, 1fr); }
-}
+}}
