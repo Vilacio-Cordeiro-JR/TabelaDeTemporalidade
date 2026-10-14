@@ -13,6 +13,19 @@ const LABELS = {
     obs: 'Observações'
 };
 
+// Ordenação dos resultados da busca.
+// Palavras-chave de maior interesse: um documento que contém alguma delas (no início de uma palavra,
+// então plurais também contam) sobe na lista. Acentos e maiúsculas são ignorados.
+const PRIORITY_KEYWORDS = ['Dossiê', 'Processo', 'Contrato', 'Projeto', 'Relatório', 'Ofício', 'Memorando'];
+
+// Faixas de peso, da mais para a menos relevante. O peso maior aparece primeiro.
+const PRIORITY_GROUPS = [
+    { key: 'both',  weight: 3, label: 'Palavra-chave no título e na observação' },
+    { key: 'title', weight: 2, label: 'Palavra-chave no título' },
+    { key: 'obs',   weight: 1, label: 'Palavra-chave na observação' },
+    { key: 'none',  weight: 0, label: 'Demais resultados' }
+];
+
 // Mesmo valor do breakpoint em style.css (900px)
 const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
 
@@ -40,6 +53,24 @@ function normalize(text) {
     return String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
+const PRIORITY_RE = new RegExp(
+    '\\b(?:' + PRIORITY_KEYWORDS.map((k) => normalize(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')'
+);
+
+function weightOf(key) {
+    return PRIORITY_GROUPS.find((g) => g.key === key).weight;
+}
+
+// Peso do documento: palavra-chave no título e na observação > só no título > só na observação > nenhuma.
+function priorityWeight(node) {
+    const inTitle = PRIORITY_RE.test(normalize(node.descricao));
+    const inObs = PRIORITY_RE.test(normalize(node.documento.obs));
+    if (inTitle && inObs) return weightOf('both');
+    if (inTitle) return weightOf('title');
+    if (inObs) return weightOf('obs');
+    return weightOf('none');
+}
+
 const hasDoc = (node) => node.documento !== null && node.documento !== undefined;
 const hasKids = (node) => Array.isArray(node.filhos) && node.filhos.length > 0;
 const hasNumericCode = (cod) => /\d/.test(cod || '');
@@ -65,6 +96,7 @@ function indexTree(node, parent = null) {
     node._id = String(indexTree.counter++);
     if (hasDoc(node)) {
         node._search = normalize(`${node.cod} ${node.descricao} ${node.documento.obs || ''}`);
+        node._weight = priorityWeight(node);
         allDocs.push(node);
     }
     node._docs = hasDoc(node) ? 1 : 0;
@@ -373,13 +405,33 @@ function resultHtml(doc) {
         </div>`;
 }
 
+// Resultados em faixas de peso. Sem nenhuma palavra-chave entre os resultados, a lista segue plana.
+function resultsHtml() {
+    if (!searchResults.some((d) => d._weight > 0)) {
+        return `<div class="results">${searchResults.map(resultHtml).join('')}</div>`;
+    }
+
+    return PRIORITY_GROUPS.map((group) => {
+        const docs = searchResults.filter((d) => d._weight === group.weight);
+        if (!docs.length) return '';
+        return `
+            <section class="result-group result-group--${group.key}">
+                <h3 class="result-group__title">
+                    <span>${esc(group.label)}</span>
+                    <span class="result-group__count">${plural(docs.length, 'documento', 'documentos')}</span>
+                </h3>
+                <div class="results">${docs.map(resultHtml).join('')}</div>
+            </section>`;
+    }).join('');
+}
+
 function renderSearchResults() {
     const container = $('listViewWrapper');
     const total = searchResults.length;
     const typed = $('searchInput').value.trim();
 
     const body = total
-        ? searchResults.map(resultHtml).join('')
+        ? resultsHtml()
         : `<div class="notice notice--info">
                <p>Nenhum documento encontrado para <strong>“${esc(typed)}”</strong>.</p>
                <p>Tente outro termo ou apenas parte do código.</p>
@@ -396,7 +448,7 @@ function renderSearchResults() {
                     <button type="button" class="btn" data-action="clear-search">Limpar busca</button>
                 </div>
             </div>
-            <div class="results">${body}</div>
+            ${body}
         </div>`;
 
     container.scrollTop = 0;
@@ -427,6 +479,7 @@ function handleSearch(query) {
     }
 
     searchResults = allDocs.filter((doc) => terms.every((t) => doc._search.includes(t)));
+    searchResults.sort((a, b) => b._weight - a._weight);
     status.textContent = searchResults.length
         ? plural(searchResults.length, 'resultado', 'resultados') + '.'
         : 'Nenhum documento encontrado.';
