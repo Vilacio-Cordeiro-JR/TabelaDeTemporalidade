@@ -14,7 +14,6 @@ const LABELS = {
 
 const PRIORITY_KEYWORDS = ['Dossiê', 'Processo', 'Contrato', 'Projeto', 'Relatório', 'Ofício', 'Memorando'];
 
-// Dicionário offline de termos correlatos / sinônimos arquivísticos
 const SYNONYMS_MAP = {
     'processo': ['expediente', 'autos', 'requerimento', 'dossie', 'procedimento', 'protocolo'],
     'contrato': ['termo', 'convenio', 'acordo', 'ajuste'],
@@ -47,7 +46,7 @@ const folderState = new Map();
 
 const $ = (id) => document.getElementById(id);
 
-/* ---------- Utilidades & Algoritmos de Busca Fuzzy ---------- */
+/* ---------- Utilidades e Algoritmos de Busca Fuzzy ---------- */
 
 function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, (c) => (
@@ -374,7 +373,7 @@ function docHtml(node, terms = []) {
         </article>`;
 }
 
-/* ---------- Visão em Cascata ---------- */
+/* ---------- Visão em Cascata (Colunas Multinível Lado a Lado) ---------- */
 
 function blockHtml(child, index, depth, selected) {
     const navigable = hasKids(child);
@@ -387,33 +386,39 @@ function blockHtml(child, index, depth, selected) {
            `<span class="nodeblk__main">${cod}<span class="nodeblk__desc">${esc(child.descricao)}</span></span>${count}</${tag}>`;
 }
 
-function groupHtml(parent, depth) {
+function cascadeColumnHtml(parent, depth) {
     const kids = parent.filhos || [];
-    const next = activeSelectionPath[depth + 1];
-    const classes = `tg ${depth === 0 ? 'tg--root' : 'tg--child'}${kids.some(hasDoc) ? ' tg--docs' : ''}`;
+    const selectedChild = activeSelectionPath[depth + 1];
 
-    const items = kids.map((child, i) => {
-        if (hasDoc(child)) return `<li class="tn tn--doc">${docHtml(child)}</li>`;
-        const open = child === next;
-        return `<li class="tn${open ? ' is-open' : ''}">${blockHtml(child, i, depth, open)}${open ? groupHtml(child, depth + 1) : ''}</li>`;
+    const items = kids.map((child, index) => {
+        if (hasDoc(child)) {
+            return `<li class="tn tn--doc">${docHtml(child)}</li>`;
+        }
+        const isSelected = child === selectedChild;
+        return `<li class="tn">${blockHtml(child, index, depth, isSelected)}</li>`;
     });
 
-    return `<ul class="${classes}">${items.join('')}</ul>`;
+    return `<ul class="tg tg--depth-${depth}">${items.join('')}</ul>`;
 }
 
 function renderCascade() {
     const wrap = $('cascadeWrapper');
-    wrap.innerHTML = groupHtml(activeSelectionPath[0], 0);
+    if (!activeSelectionPath.length) return;
+
+    const columnsHtml = activeSelectionPath.map((node, depth) => {
+        if (hasKids(node)) {
+            return cascadeColumnHtml(node, depth);
+        }
+        return '';
+    }).join('');
+
+    wrap.innerHTML = columnsHtml;
 
     if (MOBILE_QUERY.matches) return;
 
-    const box = wrap.getBoundingClientRect();
-    const groups = wrap.querySelectorAll('.tg--child');
-    const deepest = groups[groups.length - 1];
-    if (deepest) {
-        const right = deepest.getBoundingClientRect().right - box.left + wrap.scrollLeft + 24;
-        if (right > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = right - wrap.clientWidth;
-    }
+    requestAnimationFrame(() => {
+        wrap.scrollLeft = wrap.scrollWidth;
+    });
 }
 
 /* ---------- Visão em Lista / Árvore Expandível ---------- */
