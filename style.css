@@ -30,6 +30,11 @@ body {
     min-height: 100vh;
 }
 
+/* Ocultação forçada para elementos com atributo hidden */
+[hidden] {
+    display: none !important;
+}
+
 /* Cabeçalho e Pesquisa */
 .header {
     background: var(--bg-card);
@@ -97,7 +102,7 @@ body {
     pointer-events: none;
 }
 
-/* Modo de Visualização (Segmented Control) */
+/* Controles de Visualização */
 .seg {
     display: inline-flex;
     background: var(--bg-main);
@@ -124,7 +129,7 @@ body {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-/* Breadcrumb (Migalhas de Pão) */
+/* Breadcrumb */
 .breadcrumb {
     max-width: 1400px;
     margin: 0 auto;
@@ -171,12 +176,11 @@ body {
     flex-direction: column;
 }
 
-/* Visualização em Cascata (Miller Columns com Pastas) */
-/* Container Único (Moldura Principal da Pasta) */
+/* Visualização em Cascata (Container Único de Pastas - Desktop) */
 .cascade-wrapper {
     display: flex;
     flex-direction: row;
-    gap: 0; /* Remove a lacuna externa entre colunas soltas */
+    gap: 0;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -187,14 +191,13 @@ body {
     scroll-behavior: smooth;
 }
 
-/* Colunas Internas (Divisões do Container) */
 .tg {
     list-style: none;
     flex: 0 0 310px;
     min-width: 310px;
     max-width: 310px;
     background: var(--bg-card);
-    border-right: 1px solid var(--border); /* Divisória interna elegante */
+    border-right: 1px solid var(--border);
     padding: 0.75rem 0.5rem;
     display: flex;
     flex-direction: column;
@@ -204,10 +207,9 @@ body {
 }
 
 .tg:last-child {
-    border-right: none; /* Remove a borda da última coluna */
+    border-right: none;
 }
 
-/* Coluna Final de Documentos (Ficha da Tipologia) */
 .tg--docs {
     flex: 0 0 340px;
     min-width: 340px;
@@ -220,7 +222,7 @@ body {
     list-style: none;
 }
 
-/* Bloco da Cascata (Pasta / Categoria) */
+/* Bloco da Pasta/Categoria */
 .nodeblk {
     width: 100%;
     text-align: left;
@@ -255,235 +257,3 @@ body {
     align-items: center;
     gap: 0.5rem;
     overflow: hidden;
-}
-
-.nodeblk__icon {
-    font-size: 1rem;
-    flex-shrink: 0;
-}
-
-.nodeblk__desc {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.nodeblk__cod {
-    font-family: monospace;
-    font-size: 0.75rem;
-    background: #e2e8f0;
-    padding: 2px 5px;
-    border-radius: 4px;
-    flex-shrink: 0;
-}
-
-.nodeblk__right {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-shrink: 0;
-}
-
-.nodeblk__n {
-    font-size: 0.75rem;
-    background: var(--border);
-    color: var(--text-muted);
-    padding: 2px 6px;
-    border-radius: 10px;
-}
-
-.nodeblk__arrow {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    font-weight: 700;
-}
-
-/* Visualização em Lista e Busca */
-.list-wrapper {
-    width: 100%;
-    max-width: 900px;
-    margin: 0 auto;
-    overflow-y: auto;
-    max-height: calc(100vh - 170px);
-    padding-right: 0.5rem;
-}
-
-.list-inner {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.list-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.75rem;
-}
-
-.list-head__title {
-    font-size: 1.25rem;
-    font-weight: 700;
-}
-
-.list-head__hint {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-}
-
-.folder {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-card);
-    margin-bottom: 0.5rem;
-    overflow: hidden;
-}
-
-.folder__head {
-    width: 100%;
-    padding: 0.75rem 1rem;
-    background: none;
-    border: none;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    text-align: left;
-    font-size: 0.95rem;
-    font-weight: 600;
-}
-
-.folder__children {
-    padding: 0.5rem 1rem 1rem;
-    border-top: 1px solid var(--border);
-    background: var(--bg-main);
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-/* Card do Documento (Tipologia Final) */
-.doc {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.doc__top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.doc__cod {
-    font-family: monospace;
-    font-weight: 700;
-    color: var(--primary);
-}
-
-.doc__title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    line-height: 1.35;
-}
-
-.doc__fields {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    background: var(--bg-main);
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
-}
-
-.doc__obs {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-}
-
-/* Badges & Botões */
-.badge {
-    font-size: 0.75rem;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-weight: 600;
-}
-
-.badge--perm { background: var(--badge-perm-bg); color: var(--badge-perm-text); }
-.badge--elim { background: var(--badge-elim-bg); color: var(--badge-elim-text); }
-
-.btn-fav {
-    background: transparent;
-    border: none;
-    font-size: 1.25rem;
-    color: #a0aec0;
-    cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-    vertical-align: middle;
-}
-.btn-fav:hover { color: var(--focus); }
-.btn-fav.is-fav { color: var(--fav-color); }
-
-.btn {
-    border: 1px solid var(--border);
-    background: var(--bg-card);
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
-    cursor: pointer;
-}
-.btn:hover { background: var(--bg-main); }
-
-mark {
-    background: #fef08a;
-    color: #854d0e;
-    padding: 0 2px;
-    border-radius: 2px;
-}
-
-.notice {
-    padding: 1rem;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 6px;
-    color: #1e40af;
-}
-
-.result-group {
-    margin-bottom: 1.5rem;
-}
-
-.result-group__title {
-    font-size: 0.9rem;
-    padding: 0.5rem 0.75rem;
-    background: var(--border);
-    border-left: 4px solid var(--primary);
-    margin-bottom: 0.75rem;
-    display: flex;
-    justify-content: space-between;
-}
-
-.result-group--processo .result-group__title {
-    background: #eef6ff;
-    border-left-color: #1c5aa3;
-    color: #1c5aa3;
-}
-
-.result {
-    margin-bottom: 0.75rem;
-}
-
-.result__path {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-bottom: 0.25rem;
-}
