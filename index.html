@@ -7,30 +7,48 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <header class="header">
-        <div class="header__container">
-            <h1 class="header__title">Tabela de Temporalidade</h1>
-            
-            <div class="header__controls">
-                <div class="search-box">
-                    <input type="search" id="searchInput" placeholder="Buscar por código, título, obs ou sinônimos..." aria-label="Buscar documentos">
-                    <span id="searchStatus" class="search-status" aria-live="polite"></span>
-                </div>
-
-                <div class="seg" role="group" aria-label="Modo de visualização">
-                    <button id="btnViewCascade" type="button" class="seg__btn is-active" aria-pressed="true">Cascata</button>
-                    <button id="btnViewList" type="button" class="seg__btn" aria-pressed="false">Lista</button>
-                    <button id="btnViewFav" type="button" class="seg__btn" aria-pressed="false">★ Favoritos</button>
-                </div>
+    <header class="topbar">
+        <div class="brand">
+            <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+                <rect x="3" y="4" width="26" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+                <path d="M5 12v14a1 1 0 001 1h20a1 1 0 001-1V12" fill="none" stroke="currentColor" stroke-width="2"/>
+                <path d="M12 18h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <div>
+                <h1 class="brand__title">Tabela de Temporalidade</h1>
+                <p class="brand__sub">Classificação, prazos de guarda e destinação de documentos de arquivo</p>
             </div>
         </div>
-        <nav id="breadcrumbBar" class="breadcrumb" aria-label="Navegação em migalhas"></nav>
     </header>
+
+    <section class="toolbar" aria-label="Pesquisa e visualização">
+        <div class="seg" role="group" aria-label="Modo de visualização">
+            <button id="btnViewCascade" type="button" class="seg__btn is-active" aria-pressed="true">Plano de classificação</button>
+            <button id="btnViewList" type="button" class="seg__btn" aria-pressed="false">Lista</button>
+            <button id="btnViewFav" type="button" class="seg__btn" aria-pressed="false">★ Favoritos</button>
+        </div>
+
+        <div class="search-box">
+            <label for="searchInput">Pesquisar</label>
+            <div class="search-box__field">
+                <input type="search" id="searchInput" placeholder="Código, tipologia, observação ou sinônimo" autocomplete="off">
+                <span id="searchStatus" class="search-status" aria-live="polite"></span>
+            </div>
+        </div>
+    </section>
+
+    <nav id="breadcrumbBar" class="breadcrumb" aria-label="Localização no plano de classificação"></nav>
 
     <main class="main-content">
         <div id="cascadeWrapper" class="cascade-wrapper"></div>
         <div id="listViewWrapper" class="list-wrapper" hidden></div>
     </main>
+
+    <footer class="statusbar">
+        <span id="statusTotal"></span>
+        <span id="statusFav"></span>
+        <span class="statusbar__note">Prazos em anos, contados a partir da fase indicada</span>
+    </footer>
 
     <script src="app.js"></script>
 </body>

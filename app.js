@@ -9,7 +9,8 @@ const LABELS = {
     arquivo: 'Prazo no arquivo',
     permanente: 'Guarda permanente',
     eliminacao: 'Eliminação',
-    obs: 'Observações'
+    obs: 'Observações',
+    destinacao: 'Destinação final'
 };
 
 const PRIORITY_KEYWORDS = ['Dossiê', 'Processo', 'Contrato', 'Projeto', 'Relatório', 'Ofício', 'Memorando'];
@@ -283,7 +284,13 @@ function switchView(view) {
     renderApp();
 }
 
+function updateStatus() {
+    $('statusTotal').textContent = plural(allDocs.length, 'tipologia documental', 'tipologias documentais');
+    $('statusFav').textContent = plural(favoriteDocs.size, 'favorito', 'favoritos');
+}
+
 function renderApp() {
+    updateStatus();
     renderBreadcrumb();
     if (showingFavoritesOnly) {
         renderFavoritesView();
@@ -356,22 +363,18 @@ function docHtml(node, terms = []) {
     const isFav = favoriteDocs.has(node.cod);
 
     return `
-        <article class="doc${perm ? '' : ' doc--elim'}">
-            <div class="doc__top">
+        <article class="doc ${perm ? 'doc--perm' : 'doc--elim'}">
+            <header class="doc__top">
                 <span class="doc__cod">${highlight(node.cod, terms)}</span>
-                <div>
-                    <button type="button" class="btn-fav ${isFav ? 'is-fav' : ''}" data-fav="${esc(node.cod)}" title="${isFav ? 'Remover dos Favoritos' : 'Favoritar Tipologia'}">
-                        ${isFav ? '★' : '☆'}
-                    </button>
-                    <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
-                </div>
-            </div>
+                <button type="button" class="btn-fav ${isFav ? 'is-fav' : ''}" data-fav="${esc(node.cod)}" aria-pressed="${isFav}" title="${isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}">${isFav ? '★' : '☆'}</button>
+            </header>
             <h3 class="doc__title">${highlight(node.descricao, terms)}</h3>
             <dl class="doc__fields">
                 <div><dt>${LABELS.vigencia}</dt><dd>${esc(formatPrazo(d.prazo_vigencia))}</dd></div>
                 <div><dt>${LABELS.arquivo}</dt><dd>${esc(formatPrazo(d.unidade_atribuicao_arquivistica))}</dd></div>
+                <div><dt>${LABELS.destinacao}</dt><dd class="dest ${perm ? 'dest--perm' : 'dest--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</dd></div>
             </dl>
-            ${d.obs ? `<p class="doc__obs"><strong>${LABELS.obs}:</strong> ${highlight(d.obs, terms)}</p>` : ''}
+            ${d.obs ? `<p class="doc__obs"><span>${LABELS.obs}</span>${highlight(d.obs, terms)}</p>` : ''}
         </article>`;
 }
 
@@ -385,7 +388,7 @@ function blockHtml(child, index, depth, selected) {
         : ` title="${esc(nodeLabel(child))}"`;
     
     const cod = hasNumericCode(child.cod) ? `<span class="nodeblk__cod">${esc(child.cod)}</span>` : '';
-    const icon = selected ? '📂' : '📁';
+    const icon = selected ? ' ico--open' : '';
     
     const count = navigable 
         ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` 
@@ -395,7 +398,7 @@ function blockHtml(child, index, depth, selected) {
     return `
         <${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>
             <span class="nodeblk__main">
-                <span class="nodeblk__icon" aria-hidden="true">${icon}</span>
+                <span class="ico${icon}" aria-hidden="true"></span>
                 ${cod}
                 <span class="nodeblk__desc">${esc(child.descricao)}</span>
             </span>
@@ -419,7 +422,8 @@ function cascadeColumnHtml(parent, depth) {
         return `<li class="tn">${blockHtml(child, index, depth, isSelected)}</li>`;
     });
 
-    return `<ul class="tg tg--depth-${depth}${isDocColumn ? ' tg--docs' : ''}">${items.join('')}</ul>`;
+    const title = depth === 0 ? 'Plano de classificação' : nodeLabel(parent);
+    return `<ul class="tg tg--depth-${depth}${isDocColumn ? ' tg--docs' : ''}" data-title="${esc(title)}">${items.join('')}</ul>`;
 }
 
 function renderCascade() {
@@ -488,13 +492,13 @@ function listNodeHtml(node, level) {
 
     const open = isOpen(node, level);
     const cod = hasNumericCode(node.cod) ? `<span class="folder__cod">${esc(node.cod)}</span>` : '';
-    const icon = open ? '📂' : '📁';
+    const icon = open ? ' ico--open' : '';
 
     return `
         <section class="folder folder--l${Math.min(level, 3)}">
             <button type="button" class="folder__head" data-toggle="${node._id}" aria-expanded="${open}">
                 <span class="folder__main">
-                    <span class="folder__icon" aria-hidden="true">${icon}</span>
+                    <span class="ico${icon}" aria-hidden="true"></span>
                     ${cod}
                     <span class="folder__name">${esc(node.descricao)}</span>
                 </span>
