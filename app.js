@@ -4,44 +4,50 @@
    Tabela de Temporalidade e Destinação de Documentos
    ========================================================================== */
 
-// Textos exibidos nos registros. Ajuste aqui se precisar renomear algum campo.
 const LABELS = {
-    vigencia: 'Prazo de vigência',   // campo: documento.prazo_vigencia
-    arquivo: 'Prazo no arquivo',     // campo: documento.unidade_atribuicao_arquivistica
+    vigencia: 'Prazo de vigência',
+    arquivo: 'Prazo no arquivo',
     permanente: 'Guarda permanente',
     eliminacao: 'Eliminação',
     obs: 'Observações'
 };
 
-// Ordenação dos resultados da busca.
-// Palavras-chave de maior interesse: um documento que contém alguma delas (no início de uma palavra,
-// então plurais também contam) sobe na lista. Acentos e maiúsculas são ignorados.
 const PRIORITY_KEYWORDS = ['Dossiê', 'Processo', 'Contrato', 'Projeto', 'Relatório', 'Ofício', 'Memorando'];
 
-// Faixas de peso, da mais para a menos relevante. O peso maior aparece primeiro.
+// Dicionário offline de termos correlatos / sinônimos arquivísticos
+const SYNONYMS_MAP = {
+    'processo': ['expediente', 'autos', 'requerimento', 'dossie', 'procedimento', 'protocolo'],
+    'contrato': ['termo', 'convenio', 'acordo', 'ajuste'],
+    'relatorio': ['parecer', 'laudo', 'balanco', 'resumo'],
+    'oficio': ['carta', 'memorando', 'comunicado', 'notificacao'],
+    'dossie': ['prontuario', 'documentacao', 'colecao']
+};
+
 const PRIORITY_GROUPS = [
-    { key: 'both',  weight: 3, label: 'Palavra-chave no título e na observação' },
-    { key: 'title', weight: 2, label: 'Palavra-chave no título' },
-    { key: 'obs',   weight: 1, label: 'Palavra-chave na observação' },
-    { key: 'none',  weight: 0, label: 'Demais resultados' }
+    { key: 'processo', weight: 4, label: 'Documentos do tipo Processo (Alta Prioridade)' },
+    { key: 'both',     weight: 3, label: 'Palavra-chave no título e na observação' },
+    { key: 'title',    weight: 2, label: 'Palavra-chave no título' },
+    { key: 'obs',      weight: 1, label: 'Palavra-chave na observação' },
+    { key: 'none',     weight: 0, label: 'Demais resultados' }
 ];
 
-// Mesmo valor do breakpoint em style.css (900px)
 const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
 
 let treeData = null;
 let activeSelectionPath = [];
 let currentView = 'cascade';
-let searchTerms = [];          // termos da busca (normalizados); vazio = sem busca
-let searchResults = [];        // documentos que contêm todos os termos
-let viewBeforeSearch = null;   // visão em que o usuário estava antes da busca
+let searchTerms = [];
+let searchResults = [];
+let viewBeforeSearch = null;
+let favoriteDocs = new Set(JSON.parse(localStorage.getItem('fav_docs') || '[]'));
+let showingFavoritesOnly = false;
 
-const allDocs = [];            // todos os documentos, na ordem da árvore (usado na busca)
-const folderState = new Map(); // modo lista: id da pasta -> aberta (true) ou fechada (false)
+const allDocs = [];
+const folderState = new Map();
 
 const $ = (id) => document.getElementById(id);
 
-/* ---------- Utilidades ---------- */
+/* ---------- Utilidades & Algoritmos de Busca Fuzzy ---------- */
 
 function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, (c) => (
@@ -53,6 +59,34 @@ function normalize(text) {
     return String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
+function levenshteinDistance(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+
+    const matrix = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1));
+    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+    return matrix[a.length][b.length];
+}
+
+function isFuzzyMatch(targetWord, queryTerm) {
+    if (targetWord.includes(queryTerm)) return true;
+    if (queryTerm.length < 4) return false;
+    const maxDistance = queryTerm.length > 7 ? 2 : 1;
+    return levenshteinDistance(targetWord, queryTerm) <= maxDistance;
+}
+
 const PRIORITY_RE = new RegExp(
     '\\b(?:' + PRIORITY_KEYWORDS.map((k) => normalize(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')'
 );
@@ -61,10 +95,14 @@ function weightOf(key) {
     return PRIORITY_GROUPS.find((g) => g.key === key).weight;
 }
 
-// Peso do documento: palavra-chave no título e na observação > só no título > só na observação > nenhuma.
 function priorityWeight(node) {
-    const inTitle = PRIORITY_RE.test(normalize(node.descricao));
-    const inObs = PRIORITY_RE.test(normalize(node.documento.obs));
+    const titleNorm = normalize(node.descricao);
+    const obsNorm = normalize(node.documento.obs);
+
+    if (titleNorm.includes('processo')) return weightOf('processo');
+
+    const inTitle = PRIORITY_RE.test(titleNorm);
+    const inObs = PRIORITY_RE.test(obsNorm);
     if (inTitle && inObs) return weightOf('both');
     if (inTitle) return weightOf('title');
     if (inObs) return weightOf('obs');
@@ -90,7 +128,16 @@ function plural(n, one, many) {
     return `${n.toLocaleString('pt-BR')} ${n === 1 ? one : many}`;
 }
 
-// Dá um id a cada nó, guarda o pai e prepara o texto de busca.
+function toggleFavorite(code) {
+    if (favoriteDocs.has(code)) {
+        favoriteDocs.delete(code);
+    } else {
+        favoriteDocs.add(code);
+    }
+    localStorage.setItem('fav_docs', JSON.stringify(Array.from(favoriteDocs)));
+    renderApp();
+}
+
 function indexTree(node, parent = null) {
     node._parent = parent;
     node._id = String(indexTree.counter++);
@@ -117,15 +164,15 @@ function currentNode() {
     return activeSelectionPath[activeSelectionPath.length - 1];
 }
 
-/* ---------- Carga dos dados ---------- */
+/* ---------- Inicialização ---------- */
 
 document.addEventListener('DOMContentLoaded', () => {
     bindEvents();
-    $('cascadeWrapper').innerHTML = '<div class="notice notice--info"><p>Carregando tabela…</p></div>';
+    $('cascadeWrapper').innerHTML = '<div class="notice"><p>Carregando tabela…</p></div>';
 
     fetch('arvore_temporalidade.json')
         .then((response) => {
-            if (!response.ok) throw new Error('Erro ao carregar o arquivo JSON.');
+            if (!response.ok) throw new Error('Erro ao carregar dados da árvore.');
             return response.json();
         })
         .then((data) => {
@@ -139,8 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
             $('breadcrumbBar').innerHTML = '';
             $('cascadeWrapper').innerHTML = `
                 <div class="notice">
-                    <p><strong>Não foi possível carregar a tabela.</strong></p>
-                    <p>Verifique se o arquivo <em>arvore_temporalidade.json</em> está na mesma pasta do site e abra a página por um servidor (por exemplo, <em>python -m http.server</em>), não direto pelo arquivo.</p>
+                    <p><strong>Erro ao carregar a tabela.</strong></p>
+                    <p>Certifique-se de que o arquivo <em>arvore_temporalidade.json</em> esteja presente na mesma pasta.</p>
                 </div>`;
         });
 });
@@ -148,8 +195,20 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ---------- Eventos ---------- */
 
 function bindEvents() {
-    $('btnViewCascade').addEventListener('click', () => switchView('cascade'));
-    $('btnViewList').addEventListener('click', () => switchView('list'));
+    $('btnViewCascade').addEventListener('click', () => {
+        showingFavoritesOnly = false;
+        switchView('cascade');
+    });
+
+    $('btnViewList').addEventListener('click', () => {
+        showingFavoritesOnly = false;
+        switchView('list');
+    });
+
+    $('btnViewFav').addEventListener('click', () => {
+        showingFavoritesOnly = true;
+        switchView('list');
+    });
 
     let timer = null;
     $('searchInput').addEventListener('input', (e) => {
@@ -163,6 +222,14 @@ function bindEvents() {
         if (btn) jumpToDepth(Number(btn.dataset.depth));
     });
 
+    document.addEventListener('click', (e) => {
+        const favBtn = e.target.closest('[data-fav]');
+        if (favBtn) {
+            e.stopPropagation();
+            toggleFavorite(favBtn.dataset.fav);
+        }
+    });
+
     $('cascadeWrapper').addEventListener('click', (e) => {
         const block = e.target.closest('[data-idx]');
         if (!block) return;
@@ -171,7 +238,7 @@ function bindEvents() {
         const wasOpen = activeSelectionPath[depth + 1] === child;
 
         activeSelectionPath = activeSelectionPath.slice(0, depth + 1);
-        if (!wasOpen && hasKids(child)) activeSelectionPath.push(child);   // clicar de novo fecha o ramo
+        if (!wasOpen && hasKids(child)) activeSelectionPath.push(child);
         renderApp();
     });
 
@@ -194,16 +261,20 @@ function bindEvents() {
     else MOBILE_QUERY.addListener(onBreakpoint);
 }
 
-/* ---------- Navegação ---------- */
+/* ---------- Renderização & Navegação ---------- */
 
 function switchView(view) {
     currentView = view;
-    const isCascade = view === 'cascade';
+    const isCascade = view === 'cascade' && !showingFavoritesOnly;
 
     $('btnViewCascade').classList.toggle('is-active', isCascade);
     $('btnViewCascade').setAttribute('aria-pressed', String(isCascade));
-    $('btnViewList').classList.toggle('is-active', !isCascade);
-    $('btnViewList').setAttribute('aria-pressed', String(!isCascade));
+    
+    $('btnViewList').classList.toggle('is-active', view === 'list' && !showingFavoritesOnly);
+    $('btnViewList').setAttribute('aria-pressed', String(view === 'list' && !showingFavoritesOnly));
+
+    $('btnViewFav').classList.toggle('is-active', showingFavoritesOnly);
+    $('btnViewFav').setAttribute('aria-pressed', String(showingFavoritesOnly));
 
     $('cascadeWrapper').hidden = !isCascade;
     $('listViewWrapper').hidden = isCascade;
@@ -213,8 +284,13 @@ function switchView(view) {
 
 function renderApp() {
     renderBreadcrumb();
-    if (currentView === 'cascade') renderCascade();
-    else renderListView();
+    if (showingFavoritesOnly) {
+        renderFavoritesView();
+    } else if (currentView === 'cascade') {
+        renderCascade();
+    } else {
+        renderListView();
+    }
 }
 
 function jumpToDepth(depth) {
@@ -238,9 +314,8 @@ function renderBreadcrumb() {
     bar.scrollLeft = bar.scrollWidth;
 }
 
-/* ---------- Registro de documento (usado nas duas visões) ---------- */
+/* ---------- Componentes da Interface ---------- */
 
-// Escapa o texto e marca os termos buscados (ignorando acentos e maiúsculas).
 function highlight(text, terms) {
     const s = String(text ?? '');
     if (!terms || !terms.length) return esc(s);
@@ -277,13 +352,18 @@ function highlight(text, terms) {
 function docHtml(node, terms = []) {
     const d = node.documento;
     const perm = !d.eliminacao;
-    const classes = `doc${perm ? '' : ' doc--elim'}`;
+    const isFav = favoriteDocs.has(node.cod);
 
     return `
-        <article class="${classes}">
+        <article class="doc${perm ? '' : ' doc--elim'}">
             <div class="doc__top">
                 <span class="doc__cod">${highlight(node.cod, terms)}</span>
-                <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
+                <div>
+                    <button type="button" class="btn-fav ${isFav ? 'is-fav' : ''}" data-fav="${esc(node.cod)}" title="${isFav ? 'Remover dos Favoritos' : 'Favoritar Tipologia'}">
+                        ${isFav ? '★' : '☆'}
+                    </button>
+                    <span class="badge ${perm ? 'badge--perm' : 'badge--elim'}">${perm ? LABELS.permanente : LABELS.eliminacao}</span>
+                </div>
             </div>
             <h3 class="doc__title">${highlight(node.descricao, terms)}</h3>
             <dl class="doc__fields">
@@ -294,21 +374,19 @@ function docHtml(node, terms = []) {
         </article>`;
 }
 
-/* ---------- Visão em cascata (árvore de ramos) ---------- */
+/* ---------- Visão em Cascata ---------- */
 
 function blockHtml(child, index, depth, selected) {
     const navigable = hasKids(child);
     const tag = navigable ? 'button' : 'div';
     const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}" aria-expanded="${selected}"` : '';
     const cod = hasNumericCode(child.cod) ? `<span class="nodeblk__cod">${esc(child.cod)}</span>` : '';
-    const count = navigable
-        ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` : '';
+    const count = navigable ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` : '';
 
     return `<${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>` +
            `<span class="nodeblk__main">${cod}<span class="nodeblk__desc">${esc(child.descricao)}</span></span>${count}</${tag}>`;
 }
 
-// Filhos de "parent" como um grupo de blocos; o filho aberto traz o próprio ramo dentro dele.
 function groupHtml(parent, depth) {
     const kids = parent.filhos || [];
     const next = activeSelectionPath[depth + 1];
@@ -329,7 +407,6 @@ function renderCascade() {
 
     if (MOBILE_QUERY.matches) return;
 
-    // garante que o ramo mais fundo apareça por inteiro na horizontal
     const box = wrap.getBoundingClientRect();
     const groups = wrap.querySelectorAll('.tg--child');
     const deepest = groups[groups.length - 1];
@@ -339,7 +416,7 @@ function renderCascade() {
     }
 }
 
-/* ---------- Visão em lista ---------- */
+/* ---------- Visão em Lista / Árvore Expandível ---------- */
 
 function isOpen(node, level) {
     return folderState.has(node._id) ? folderState.get(node._id) : level === 1;
@@ -391,10 +468,32 @@ function renderListView() {
             </div>
             <div class="tree">${(node.filhos || []).map((c) => listNodeHtml(c, 1)).join('')}</div>
         </div>`;
-
 }
 
-/* ---------- Busca: resultados aparecem na visão em lista ---------- */
+function renderFavoritesView() {
+    const container = $('listViewWrapper');
+    const favs = allDocs.filter((d) => favoriteDocs.has(d.cod));
+
+    const body = favs.length
+        ? `<div class="results">${favs.map(resultHtml).join('')}</div>`
+        : `<div class="notice">
+               <p>Nenhuma tipologia favoritada ainda.</p>
+               <p>Clique na estrela (☆) ao lado de qualquer folha/documento para adicioná-la aqui.</p>
+           </div>`;
+
+    container.innerHTML = `
+        <div class="list-inner">
+            <div class="list-head">
+                <div>
+                    <h2 class="list-head__title">Tipologias Favoritas</h2>
+                    <p class="list-head__hint">${plural(favs.length, 'documento favoritado', 'documentos favoritados')}.</p>
+                </div>
+            </div>
+            ${body}
+        </div>`;
+}
+
+/* ---------- Mecanismo de Pesquisa ---------- */
 
 function resultHtml(doc) {
     const folders = pathTo(doc).slice(1, -1).map((n) => esc(nodeLabel(n))).join(' › ');
@@ -405,7 +504,6 @@ function resultHtml(doc) {
         </div>`;
 }
 
-// Resultados em faixas de peso. Sem nenhuma palavra-chave entre os resultados, a lista segue plana.
 function resultsHtml() {
     if (!searchResults.some((d) => d._weight > 0)) {
         return `<div class="results">${searchResults.map(resultHtml).join('')}</div>`;
@@ -432,9 +530,9 @@ function renderSearchResults() {
 
     const body = total
         ? resultsHtml()
-        : `<div class="notice notice--info">
+        : `<div class="notice">
                <p>Nenhum documento encontrado para <strong>“${esc(typed)}”</strong>.</p>
-               <p>Tente outro termo ou apenas parte do código.</p>
+               <p>Tente outro termo, sinônimo ou código.</p>
            </div>`;
 
     container.innerHTML = `
@@ -462,10 +560,18 @@ function clearSearch() {
 function handleSearch(query) {
     if (!treeData) return;
     const status = $('searchStatus');
-    const terms = normalize(query).split(/\s+/).filter(Boolean);
-    searchTerms = terms;
+    const rawTerms = normalize(query).split(/\s+/).filter(Boolean);
+    
+    let expandedTerms = [...rawTerms];
+    rawTerms.forEach(t => {
+        if (SYNONYMS_MAP[t]) {
+            expandedTerms.push(...SYNONYMS_MAP[t]);
+        }
+    });
 
-    if (!terms.length) {
+    searchTerms = rawTerms;
+
+    if (!rawTerms.length) {
         searchResults = [];
         status.textContent = '';
         if (viewBeforeSearch) {
@@ -478,16 +584,28 @@ function handleSearch(query) {
         return;
     }
 
-    searchResults = allDocs.filter((doc) => terms.every((t) => doc._search.includes(t)));
+    searchResults = allDocs.filter((doc) => {
+        const textWords = doc._search.split(/\s+/);
+        
+        return rawTerms.every((queryTerm) => {
+            const related = [queryTerm, ...(SYNONYMS_MAP[queryTerm] || [])];
+            const hasExactOrSynonym = related.some(term => doc._search.includes(term));
+            if (hasExactOrSynonym) return true;
+
+            return textWords.some(word => isFuzzyMatch(word, queryTerm));
+        });
+    });
+
     searchResults.sort((a, b) => b._weight - a._weight);
+
     status.textContent = searchResults.length
         ? plural(searchResults.length, 'resultado', 'resultados') + '.'
         : 'Nenhum documento encontrado.';
 
-    if (currentView !== 'list') {
+    if (currentView !== 'list' && !showingFavoritesOnly) {
         viewBeforeSearch = currentView;
         switchView('list');
     } else {
         renderApp();
     }
-                                         }
+}
