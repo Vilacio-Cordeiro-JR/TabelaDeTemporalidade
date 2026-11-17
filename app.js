@@ -264,13 +264,15 @@ function bindEvents() {
 
 function switchView(view) {
     currentView = view;
-    const isCascade = view === 'cascade' && !showingFavoritesOnly;
+    
+    const isSearching = searchTerms.length > 0;
+    const isCascade = view === 'cascade' && !showingFavoritesOnly && !isSearching;
 
     $('btnViewCascade').classList.toggle('is-active', isCascade);
     $('btnViewCascade').setAttribute('aria-pressed', String(isCascade));
     
-    $('btnViewList').classList.toggle('is-active', view === 'list' && !showingFavoritesOnly);
-    $('btnViewList').setAttribute('aria-pressed', String(view === 'list' && !showingFavoritesOnly));
+    $('btnViewList').classList.toggle('is-active', (view === 'list' || isSearching) && !showingFavoritesOnly);
+    $('btnViewList').setAttribute('aria-pressed', String((view === 'list' || isSearching) && !showingFavoritesOnly));
 
     $('btnViewFav').classList.toggle('is-active', showingFavoritesOnly);
     $('btnViewFav').setAttribute('aria-pressed', String(showingFavoritesOnly));
@@ -285,7 +287,7 @@ function renderApp() {
     renderBreadcrumb();
     if (showingFavoritesOnly) {
         renderFavoritesView();
-    } else if (currentView === 'cascade') {
+    } else if (currentView === 'cascade' && searchTerms.length === 0) {
         renderCascade();
     } else {
         renderListView();
@@ -373,7 +375,7 @@ function docHtml(node, terms = []) {
         </article>`;
 }
 
-/* ---------- Visão em Cascata (Miller Columns com Ícones de Pasta) ---------- */
+/* ---------- Visão em Cascata (Desktop: Container Único / Mobile: Expansão Vertical) ---------- */
 
 function blockHtml(child, index, depth, selected) {
     const navigable = hasKids(child);
@@ -424,6 +426,35 @@ function renderCascade() {
     const wrap = $('cascadeWrapper');
     if (!activeSelectionPath.length) return;
 
+    // Mobile: Renderiza pastas sanfonadas expandindo para baixo
+    if (MOBILE_QUERY.matches) {
+        const buildMobileBranch = (parent, depth) => {
+            const kids = parent.filhos || [];
+            const selectedChild = activeSelectionPath[depth + 1];
+
+            const items = kids.map((child, index) => {
+                if (hasDoc(child)) {
+                    return `<li class="tn tn--doc">${docHtml(child)}</li>`;
+                }
+
+                const isSelected = child === selectedChild;
+                const hasSubBranch = isSelected && hasKids(child);
+
+                return `
+                    <li class="tn">
+                        ${blockHtml(child, index, depth, isSelected)}
+                        ${hasSubBranch ? buildMobileBranch(child, depth + 1) : ''}
+                    </li>`;
+            });
+
+            return `<ul class="tg tg--mobile tg--depth-${depth}">${items.join('')}</ul>`;
+        };
+
+        wrap.innerHTML = buildMobileBranch(activeSelectionPath[0], 0);
+        return;
+    }
+
+    // Desktop: Renderiza colunas lado a lado dentro do container único
     const columnsHtml = activeSelectionPath.map((node, depth) => {
         if (hasKids(node)) {
             return cascadeColumnHtml(node, depth);
@@ -432,8 +463,6 @@ function renderCascade() {
     }).join('');
 
     wrap.innerHTML = columnsHtml;
-
-    if (MOBILE_QUERY.matches) return;
 
     requestAnimationFrame(() => {
         wrap.scrollLeft = wrap.scrollWidth;
@@ -608,9 +637,13 @@ function handleSearch(query) {
             viewBeforeSearch = null;
             switchView(previous);
         } else {
-            renderApp();
+            switchView(currentView);
         }
         return;
+    }
+
+    if (!viewBeforeSearch) {
+        viewBeforeSearch = currentView;
     }
 
     searchResults = allDocs.filter((doc) => {
@@ -631,10 +664,9 @@ function handleSearch(query) {
         ? plural(searchResults.length, 'resultado', 'resultados') + '.'
         : 'Nenhum documento encontrado.';
 
-    if (currentView !== 'list' && !showingFavoritesOnly) {
-        viewBeforeSearch = currentView;
-        switchView('list');
-    } else {
-        renderApp();
-    }
+    // Oculta obrigatoriamente a cascata durante a busca
+    $('cascadeWrapper').hidden = true;
+    $('listViewWrapper').hidden = false;
+    
+    renderSearchResults();
 }
