@@ -2,48 +2,35 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tabela de Temporalidade e Destinação de Documentos</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="app">
-
-        <header class="site-header">
-            <div class="site-header__inner">
-                <div class="brand">
-                    <h1 class="brand__title">Sistema de Gestão Documental</h1>
-                    <p class="brand__sub">Tabela de Temporalidade e Destinação de Documentos</p>
+    <header class="header">
+        <div class="header__container">
+            <h1 class="header__title">Tabela de Temporalidade</h1>
+            
+            <div class="header__controls">
+                <div class="search-box">
+                    <input type="search" id="searchInput" placeholder="Buscar por código, título, obs ou sinônimos..." aria-label="Buscar documentos">
+                    <span id="searchStatus" class="search-status" aria-live="polite"></span>
                 </div>
 
-                <div class="tools">
-                    <div class="seg" role="group" aria-label="Modo de visualização">
-                        <button id="btnViewCascade" type="button" class="seg__btn is-active" aria-pressed="true">Cascata</button>
-                        <button id="btnViewList" type="button" class="seg__btn" aria-pressed="false">Lista</button>
-                    </div>
-                    <div class="search">
-                        <input id="searchInput"
-                               class="search__input"
-                               type="search"
-                               placeholder="Buscar por código ou descrição"
-                               aria-label="Buscar por código ou descrição"
-                               autocomplete="off">
-                        <p id="searchStatus" class="search__status" role="status"></p>
-                    </div>
+                <div class="seg" role="group" aria-label="Modo de visualização">
+                    <button id="btnViewCascade" type="button" class="seg__btn is-active" aria-pressed="true">Cascata</button>
+                    <button id="btnViewList" type="button" class="seg__btn" aria-pressed="false">Lista</button>
+                    <button id="btnViewFav" type="button" class="seg__btn" aria-pressed="false">★ Favoritos</button>
                 </div>
             </div>
-        </header>
+        </div>
+        <nav id="breadcrumbBar" class="breadcrumb" aria-label="Navegação em migalhas"></nav>
+    </header>
 
-        <nav class="crumbs" aria-label="Trilha de navegação">
-            <div id="breadcrumbBar" class="crumbs__inner"></div>
-        </nav>
-
-        <main class="main">
-            <div id="cascadeWrapper" class="cascade"></div>
-            <div id="listViewWrapper" class="listview" hidden></div>
-        </main>
-
-    </div>
+    <main class="main-content">
+        <div id="cascadeWrapper" class="cascade-wrapper"></div>
+        <div id="listViewWrapper" class="list-wrapper" hidden></div>
+    </main>
 
     <script src="app.js"></script>
 </body>
