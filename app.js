@@ -46,7 +46,7 @@ const folderState = new Map();
 
 const $ = (id) => document.getElementById(id);
 
-/* ---------- Utilidades e Algoritmos de Busca Fuzzy ---------- */
+/* ---------- Utilidades e Algoritmos de Busca ---------- */
 
 function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, (c) => (
@@ -373,22 +373,41 @@ function docHtml(node, terms = []) {
         </article>`;
 }
 
-/* ---------- Visão em Cascata (Colunas Multinível Lado a Lado) ---------- */
+/* ---------- Visão em Cascata (Miller Columns com Ícones de Pasta) ---------- */
 
 function blockHtml(child, index, depth, selected) {
     const navigable = hasKids(child);
     const tag = navigable ? 'button' : 'div';
-    const attrs = navigable ? ` type="button" data-depth="${depth}" data-idx="${index}" aria-expanded="${selected}"` : '';
+    const attrs = navigable 
+        ? ` type="button" data-depth="${depth}" data-idx="${index}" aria-expanded="${selected}" title="${esc(nodeLabel(child))}"` 
+        : ` title="${esc(nodeLabel(child))}"`;
+    
     const cod = hasNumericCode(child.cod) ? `<span class="nodeblk__cod">${esc(child.cod)}</span>` : '';
-    const count = navigable ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` : '';
+    const icon = selected ? '📂' : '📁';
+    
+    const count = navigable 
+        ? `<span class="nodeblk__n" title="${plural(child.filhos.length, 'item', 'itens')}">${child.filhos.length}</span>` 
+        : '';
+    const arrow = navigable ? `<span class="nodeblk__arrow">›</span>` : '';
 
-    return `<${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>` +
-           `<span class="nodeblk__main">${cod}<span class="nodeblk__desc">${esc(child.descricao)}</span></span>${count}</${tag}>`;
+    return `
+        <${tag} class="nodeblk${selected ? ' is-selected' : ''}"${attrs}>
+            <span class="nodeblk__main">
+                <span class="nodeblk__icon" aria-hidden="true">${icon}</span>
+                ${cod}
+                <span class="nodeblk__desc">${esc(child.descricao)}</span>
+            </span>
+            <span class="nodeblk__right">
+                ${count}
+                ${arrow}
+            </span>
+        </${tag}>`;
 }
 
 function cascadeColumnHtml(parent, depth) {
     const kids = parent.filhos || [];
     const selectedChild = activeSelectionPath[depth + 1];
+    const isDocColumn = kids.some(hasDoc);
 
     const items = kids.map((child, index) => {
         if (hasDoc(child)) {
@@ -398,7 +417,7 @@ function cascadeColumnHtml(parent, depth) {
         return `<li class="tn">${blockHtml(child, index, depth, isSelected)}</li>`;
     });
 
-    return `<ul class="tg tg--depth-${depth}">${items.join('')}</ul>`;
+    return `<ul class="tg tg--depth-${depth}${isDocColumn ? ' tg--docs' : ''}">${items.join('')}</ul>`;
 }
 
 function renderCascade() {
@@ -440,11 +459,16 @@ function listNodeHtml(node, level) {
 
     const open = isOpen(node, level);
     const cod = hasNumericCode(node.cod) ? `<span class="folder__cod">${esc(node.cod)}</span>` : '';
+    const icon = open ? '📂' : '📁';
 
     return `
         <section class="folder folder--l${Math.min(level, 3)}">
             <button type="button" class="folder__head" data-toggle="${node._id}" aria-expanded="${open}">
-                <span class="folder__main">${cod}<span class="folder__name">${esc(node.descricao)}</span></span>
+                <span class="folder__main">
+                    <span class="folder__icon" aria-hidden="true">${icon}</span>
+                    ${cod}
+                    <span class="folder__name">${esc(node.descricao)}</span>
+                </span>
                 <span class="folder__count">${plural(node.filhos.length, 'item', 'itens')}</span>
                 <span class="folder__toggle" aria-hidden="true">${open ? '−' : '+'}</span>
             </button>
